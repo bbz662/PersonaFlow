@@ -10,6 +10,9 @@
   --shadow: 0 22px 60px rgba(57, 40, 16, 0.12);
   --brand: #b65c2e;
   --brand-strong: #8f431d;
+  --success-bg: rgba(80, 122, 76, 0.12);
+  --success-text: #355b2c;
+  --error: #a33f2a;
 }
 
 * {
@@ -133,18 +136,70 @@ h1 {
   box-shadow: 0 14px 32px rgba(143, 67, 29, 0.28);
   transition:
     transform 160ms ease,
-    box-shadow 160ms ease;
+    box-shadow 160ms ease,
+    opacity 160ms ease;
 }
 
-.start-button:hover {
+.start-button:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 16px 36px rgba(143, 67, 29, 0.34);
+}
+
+.start-button:disabled {
+  cursor: wait;
+  opacity: 0.78;
 }
 
 .button-note {
   margin: 0;
   font-size: 0.92rem;
   color: var(--muted);
+}
+
+.error-note {
+  margin: 0;
+  color: var(--error);
+  font-size: 0.92rem;
+}
+
+.session-state {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 18px;
+  background: var(--success-bg);
+}
+
+.session-label {
+  margin: 0;
+  color: var(--success-text);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.session-details {
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.session-details div {
+  display: grid;
+  gap: 4px;
+}
+
+.session-details dt {
+  color: var(--muted);
+  font-size: 0.84rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.session-details dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.98rem;
+  word-break: break-word;
 }
 
 @media (max-width: 760px) {

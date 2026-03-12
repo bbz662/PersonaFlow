@@ -50,3 +50,29 @@ class FirestoreScaffoldTests(unittest.TestCase):
             database="persona-db",
         )
         self.assertIs(client, fake_client)
+
+    def test_create_session_persists_document(self) -> None:
+        session_ref = Mock()
+        collection_ref = Mock()
+        collection_ref.document.return_value = session_ref
+        client = Mock()
+        client.collection.return_value = collection_ref
+        repository = SessionRepository(client=client)
+
+        repository.create_session(
+            "session-123",
+            {
+                "status": "started",
+                "started_at": "2026-03-13T10:00:00+00:00",
+            },
+        )
+
+        client.collection.assert_called_once_with("sessions")
+        collection_ref.document.assert_called_once_with("session-123")
+        session_ref.set.assert_called_once_with(
+            {
+                "session_id": "session-123",
+                "status": "started",
+                "started_at": "2026-03-13T10:00:00+00:00",
+            }
+        )
