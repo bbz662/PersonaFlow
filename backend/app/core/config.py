@@ -9,6 +9,8 @@ class Settings:
     app_env: str
     app_host: str
     port: int
+    google_cloud_project: str | None
+    firestore_database_id: str
 
     @property
     def is_development(self) -> bool:
@@ -24,4 +26,6 @@ def get_settings() -> Settings:
         app_env=os.getenv("APP_ENV", "development"),
         app_host=os.getenv("APP_HOST", "127.0.0.1"),
         port=int(port),
+        google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT") or None,
+        firestore_database_id=os.getenv("FIRESTORE_DATABASE_ID") or "(default)",
     )
