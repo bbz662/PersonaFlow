@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: PersonaFlow repository guide
+    url: https://github.com/bbz662/PersonaFlow
+    about: Read the README and AGENTS.md before opening a new issue.
