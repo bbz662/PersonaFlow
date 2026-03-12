@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from app.core.firestore import get_firestore_client
@@ -36,9 +37,10 @@ class SessionRepository:
         return self.get_session_ref(session_id).collection(PHRASE_CARDS_SUBCOLLECTION)
 
     def create_session(self, session_id: str, payload: dict[str, object]) -> None:
-        raise NotImplementedError(
-            "Session persistence will be implemented in a future session issue."
-        )
+        session_doc = self.build_session_doc(session_id)
+        session_doc.update(payload)
+        session_doc.setdefault("started_at", datetime.now(timezone.utc).isoformat())
+        self.get_session_ref(session_id).set(session_doc)
 
     def add_transcript_entry(
         self, session_id: str, entry_id: str, payload: dict[str, object]
