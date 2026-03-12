@@ -24,6 +24,11 @@ PersonaFlow is a voice-first MVP for language learners who want to preserve thei
 - Hosting: Cloud Run
 - AI: Gemini Live API + Google GenAI SDK
 
+## Repository layout
+- `frontend/` contains the web app.
+- `backend/` contains the API service.
+- Keep top-level config and shared docs minimal and explicit.
+
 ## Workflow
 - One issue = one focused PR.
 - Include a short implementation summary in the PR description.
