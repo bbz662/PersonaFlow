@@ -1,1 +1,229 @@
 # PersonaFlow
+
+PersonaFlow is a voice-first language-learning agent that helps learners build an English voice that still feels like themselves.
+
+Instead of translating sentence by sentence, PersonaFlow encourages natural casual conversation in the learner’s native language, then turns the most reusable and personal moments into English phrase cards for later review. The goal is not textbook correctness alone, but preserving tone, personality, and self-expression across languages.
+
+## Why PersonaFlow?
+
+Many language-learning tools help people produce correct sentences, but not necessarily sentences that feel personal.
+
+PersonaFlow focuses on a different problem:
+
+- learners want to sound like themselves in English
+- learners want to study phrases they would actually use
+- learners do not want constant correction during conversation
+- learners benefit from reviewing their own expressions after speaking naturally
+
+PersonaFlow is designed around **self-expression preservation**, not real-time translation.
+
+## MVP Scope
+
+The current MVP focuses on a simple end-to-end flow:
+
+1. start a voice session
+2. have a natural casual conversation in the user’s native language
+3. save the session transcript
+4. generate 3–5 personalized English phrase cards after the session
+5. review those cards in a lightweight results screen
+
+### In scope
+
+- voice-first conversation flow
+- casual small-talk interaction
+- transcript-based post-session processing
+- personalized English phrase card generation
+- minimal web UI
+- deployment on Google Cloud
+
+### Out of scope for the MVP
+
+- authentication
+- multi-user account system
+- real-time translation UI
+- grammar correction during conversation
+- pronunciation scoring
+- flashcard export
+- long-term spaced repetition system
+- audio file persistence
+- advanced multi-session memory
+
+## Product Principles
+
+- **Conversation first**: the user should stay focused on speaking
+- **Post-session learning**: learning artifacts are generated after the conversation
+- **Personal over generic**: prioritize phrases that reflect the learner’s own style
+- **Not a translation app**: avoid turning the experience into literal sentence conversion
+- **Minimal UI friction**: voice-driven interaction with lightweight controls
+
+## Planned Architecture
+
+### Frontend
+- Next.js
+- TypeScript
+
+### Backend
+- FastAPI
+- Python
+
+### AI
+- Gemini Live API
+- Google GenAI SDK
+
+### Data
+- Firestore
+
+### Hosting
+- Google Cloud Run
+
+## Planned Data Model
+
+### Session
+Stores high-level session metadata.
+
+Example fields:
+- `session_id`
+- `user_id` (anonymous for MVP)
+- `source_language`
+- `target_language`
+- `status`
+- `started_at`
+- `ended_at`
+- `session_summary`
+- `card_count`
+
+### Transcript Entries
+Stores user and agent utterances for each session.
+
+Example fields:
+- `entry_id`
+- `speaker`
+- `text`
+- `language`
+- `timestamp`
+- `turn_index`
+
+### Phrase Cards
+Stores post-session learning artifacts.
+
+Example fields:
+- `card_id`
+- `source_text`
+- `english_expression`
+- `tone_tag`
+- `usage_note`
+- `created_at`
+
+## Repository Structure
+
+This repository is expected to use a simple two-app structure:
+
+```text
+PersonaFlow/
+├── frontend/   # Next.js app
+├── backend/    # FastAPI app
+├── README.md
+├── AGENTS.md
+└── .env.example
+````
+
+## Development Status
+
+PersonaFlow is currently being developed as an MVP for a hackathon.
+
+At this stage, the focus is on:
+
+* establishing the repository scaffold
+* building the core session flow
+* connecting live conversation
+* generating post-session phrase cards
+* preparing a working demo
+
+## Local Development
+
+This section will be expanded as implementation progresses.
+
+### Expected prerequisites
+
+* Node.js
+* Python 3.11+
+* Google Cloud project
+* Firestore enabled
+* access to Gemini API / Live API
+* environment variables configured
+
+### Planned setup
+
+#### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+#### Backend
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+```
+
+## Environment Variables
+
+The exact variables may evolve, but the project is expected to require configuration similar to:
+
+```bash
+# Frontend
+NEXT_PUBLIC_API_BASE_URL=
+
+# Backend
+GOOGLE_CLOUD_PROJECT=
+FIRESTORE_DATABASE_ID=
+GEMINI_API_KEY=
+GEMINI_MODEL=
+PORT=
+```
+
+Use a local `.env` file for development and a secure secret management strategy for deployment.
+
+## Safety and Privacy Notes
+
+For the MVP:
+
+* audio files should not be persisted
+* only text transcript and generated phrase cards should be stored
+* sensitive personal content should be avoided in generated cards when possible
+* secrets must never be committed to the repository
+
+## Contribution and Workflow
+
+Development is currently organized issue-by-issue.
+
+General workflow:
+
+1. pick a single scoped issue
+2. implement a focused change
+3. open a small PR
+4. review for MVP scope alignment
+5. merge and move to the next issue
+
+Please keep changes minimal and avoid adding features outside the current issue.
+
+## Hackathon Context
+
+PersonaFlow is being built as a live conversational language-learning MVP for a hackathon setting. The priority is a clear, working end-to-end demo over architectural completeness.
+
+## Vision
+
+Longer term, PersonaFlow aims to become a self-expression coach for second-language learners:
+
+* not just helping users say things correctly
+* but helping them say things in a way that still feels genuinely their own
+
+## Elevator Pitch
+
+PersonaFlow helps learners build an English voice that still feels like themselves by turning casual native-language conversations into personalized phrases and flashcards.
