@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useReducer, useRef } from "react";
 
-type RealtimePhase =
-  | "idle"
-  | "connecting"
-  | "listening"
-  | "thinking"
-  | "speaking"
-  | "tool_running"
-  | "error";
+import {
+  initialVoiceSessionState,
+  voiceSessionReducer,
+  type VoiceSessionEvent,
+  type VoiceSessionState,
+  type VoiceSessionStatus,
+} from "../../lib/voice-session-state";
 
 type TranscriptEntry = {
   id: string;
@@ -34,7 +33,7 @@ type PhaseDescriptor = {
   indicatorTone: "neutral" | "active" | "warn" | "error";
 };
 
-const phaseDescriptors: Record<RealtimePhase, PhaseDescriptor> = {
+const phaseDescriptors: Record<VoiceSessionStatus, PhaseDescriptor> = {
   idle: {
     title: "Ready for a voice turn",
     detail: "The shell is staged for a new session. No live transport or audio capture is running.",
@@ -48,6 +47,13 @@ const phaseDescriptors: Record<RealtimePhase, PhaseDescriptor> = {
     connectionLabel: "Connecting",
     assistantLabel: "Booting",
     indicatorTone: "warn",
+  },
+  connected: {
+    title: "Connected and standing by",
+    detail: "The session is connected and ready to arm the microphone for the next learner turn.",
+    connectionLabel: "Connected",
+    assistantLabel: "Ready",
+    indicatorTone: "active",
   },
   listening: {
     title: "Listening for the learner",
@@ -77,11 +83,25 @@ const phaseDescriptors: Record<RealtimePhase, PhaseDescriptor> = {
     assistantLabel: "Using tool",
     indicatorTone: "warn",
   },
-  error: {
-    title: "Recoverable interruption",
-    detail: "The session hit a transient failure. The banner exposes the recovery path without leaving the screen.",
+  interrupted: {
+    title: "Session interrupted",
+    detail: "An interruption paused the active turn and left the session ready to reconnect cleanly.",
     connectionLabel: "Interrupted",
     assistantLabel: "Paused",
+    indicatorTone: "error",
+  },
+  disconnected: {
+    title: "Session disconnected",
+    detail: "The realtime session has ended locally. Reconnect to start a new mock turn cycle.",
+    connectionLabel: "Disconnected",
+    assistantLabel: "Offline",
+    indicatorTone: "neutral",
+  },
+  error: {
+    title: "Error needs attention",
+    detail: "The session hit an error state. Recoverable and fatal failures are surfaced explicitly.",
+    connectionLabel: "Error",
+    assistantLabel: "Blocked",
     indicatorTone: "error",
   },
 };
@@ -145,24 +165,42 @@ const completedToolEvent: ToolEvent = {
     "Candidate: 'I stayed in, made curry, and ended up talking with my sister for hours.' Tone: warm, casual, personal.",
 };
 
-function buildTranscript(phase: RealtimePhase) {
-  if (phase === "connecting" || phase === "idle" || phase === "error") {
-    return baseTranscript;
+function buildTranscript(state: VoiceSessionState) {
+  switch (state.status) {
+    case "listening":
+      return [...baseTranscript, listeningTranscript];
+    case "thinking":
+    case "tool_running":
+      return [...baseTranscript, thinkingTranscript];
+    case "speaking":
+      return [...baseTranscript, thinkingTranscript, speakingTranscript];
+    case "interrupted":
+      return [
+        ...baseTranscript,
+        {
+          id: "interrupted-turn",
+          speaker: "system",
+          text: `Current turn paused from ${state.interruptedFrom.replace("_", " ")}.`,
+          detail: "Interrupted",
+        },
+      ];
+    case "error":
+      return [
+        ...baseTranscript,
+        {
+          id: "error-turn",
+          speaker: "system",
+          text: state.message,
+          detail: state.recoverable ? "Recoverable error" : "Fatal error",
+        },
+      ];
+    default:
+      return baseTranscript;
   }
-
-  if (phase === "listening") {
-    return [...baseTranscript, listeningTranscript];
-  }
-
-  if (phase === "thinking" || phase === "tool_running") {
-    return [...baseTranscript, thinkingTranscript];
-  }
-
-  return [...baseTranscript, thinkingTranscript, speakingTranscript];
 }
 
-function buildToolEvent(phase: RealtimePhase) {
-  if (phase === "tool_running") {
+function buildToolEvent(status: VoiceSessionStatus) {
+  if (status === "tool_running") {
     return {
       ...baseToolEvent,
       status: "running",
@@ -170,19 +208,19 @@ function buildToolEvent(phase: RealtimePhase) {
     } satisfies ToolEvent;
   }
 
-  if (phase === "speaking") {
+  if (status === "speaking") {
     return completedToolEvent;
   }
 
   return baseToolEvent;
 }
 
-function phasePillLabel(phase: RealtimePhase) {
-  return phase.replace("_", " ");
+function phasePillLabel(status: VoiceSessionStatus) {
+  return status.replace("_", " ");
 }
 
-function ConnectionStatus({ phase }: { phase: RealtimePhase }) {
-  const descriptor = phaseDescriptors[phase];
+function ConnectionStatus({ status }: { status: VoiceSessionStatus }) {
+  const descriptor = phaseDescriptors[status];
 
   return (
     <div className="voice-card voice-status-card" aria-live="polite">
@@ -201,21 +239,21 @@ function ConnectionStatus({ phase }: { phase: RealtimePhase }) {
   );
 }
 
-function AssistantStateIndicator({ phase }: { phase: RealtimePhase }) {
-  const descriptor = phaseDescriptors[phase];
+function AssistantStateIndicator({ status }: { status: VoiceSessionStatus }) {
+  const descriptor = phaseDescriptors[status];
 
   return (
     <div className="voice-card voice-status-card" aria-live="polite">
       <p className="panel-label">Assistant state</p>
       <p className="voice-state-title">{descriptor.assistantLabel}</p>
       <p className="voice-status-copy">{descriptor.title}</p>
-      <p className="voice-phase-pill">{phasePillLabel(phase)}</p>
+      <p className="voice-phase-pill">{phasePillLabel(status)}</p>
     </div>
   );
 }
 
-function TranscriptPanel({ phase }: { phase: RealtimePhase }) {
-  const transcript = buildTranscript(phase);
+function TranscriptPanel({ state }: { state: VoiceSessionState }) {
+  const transcript = buildTranscript(state);
 
   return (
     <section className="voice-card voice-panel-tall">
@@ -240,8 +278,8 @@ function TranscriptPanel({ phase }: { phase: RealtimePhase }) {
   );
 }
 
-function ToolPanel({ phase }: { phase: RealtimePhase }) {
-  const toolEvent = buildToolEvent(phase);
+function ToolPanel({ status }: { status: VoiceSessionStatus }) {
+  const toolEvent = buildToolEvent(status);
 
   return (
     <section className="voice-card">
@@ -268,49 +306,69 @@ function ToolPanel({ phase }: { phase: RealtimePhase }) {
   );
 }
 
+function primaryActionLabel(status: VoiceSessionStatus) {
+  switch (status) {
+    case "idle":
+      return "Connect Session";
+    case "connecting":
+      return "Finish Connecting";
+    case "connected":
+      return "Start Listening";
+    case "listening":
+      return "Simulate Learner Turn";
+    case "thinking":
+      return "Start Response";
+    case "speaking":
+      return "Finish Response";
+    case "tool_running":
+      return "Finish Tool Step";
+    case "interrupted":
+      return "Reconnect Session";
+    case "disconnected":
+      return "Reconnect Session";
+    case "error":
+      return "Resume Session";
+  }
+}
+
 function MicrophoneControl({
-  phase,
+  state,
   onPrimaryAction,
-  onReset,
-  onError,
+  onDisconnect,
+  onInterrupt,
+  onRecoverableError,
 }: {
-  phase: RealtimePhase;
+  state: VoiceSessionState;
   onPrimaryAction: () => void;
-  onReset: () => void;
-  onError: () => void;
+  onDisconnect: () => void;
+  onInterrupt: () => void;
+  onRecoverableError: () => void;
 }) {
-  const descriptor = phaseDescriptors[phase];
-  const primaryLabel =
-    phase === "idle"
-      ? "Connect Session"
-      : phase === "listening"
-        ? "Simulate Learner Turn"
-        : phase === "error"
-          ? "Resume Session"
-          : "Advance Mock State";
+  const descriptor = phaseDescriptors[state.status];
 
   return (
     <section className="voice-card voice-controls-card">
       <p className="panel-label">Microphone control</p>
       <div className="voice-mic-shell">
-        <button className={`voice-mic-button phase-${phase}`} type="button" onClick={onPrimaryAction}>
-          {phase === "listening" ? "Mic On" : "Mic"}
+        <button className={`voice-mic-button phase-${state.status}`} type="button" onClick={onPrimaryAction}>
+          {state.status === "listening" ? "Mic On" : "Mic"}
         </button>
         <div>
           <p className="mic-status-title">{descriptor.title}</p>
-          <p className="mic-status-copy">
-            Mock-only control surface. This does not access the real microphone.
-          </p>
+          <p className="mic-status-copy">Mock-only control surface. This does not access the real microphone.</p>
         </div>
       </div>
       <div className="voice-control-actions">
         <button className="start-button" type="button" onClick={onPrimaryAction}>
-          {primaryLabel}
+          {primaryActionLabel(state.status)}
         </button>
-        <button className="secondary-button" type="button" onClick={onReset}>
-          Reset
+        <button className="secondary-button" type="button" onClick={onDisconnect}>
+          Disconnect
         </button>
-        <button className="secondary-button" type="button" onClick={onError}>
+        <button className="secondary-button" type="button" onClick={onInterrupt}>
+          Interrupt
+        </button>
+        <button className="secondary-button" type="button" onClick={onRecoverableError}>
           Trigger Error
         </button>
       </div>
@@ -319,10 +377,10 @@ function MicrophoneControl({
 }
 
 export default function RealtimeVoicePage() {
-  const [phase, setPhase] = useState<RealtimePhase>("idle");
+  const [state, dispatch] = useReducer(voiceSessionReducer, initialVoiceSessionState);
   const timersRef = useRef<number[]>([]);
 
-  const descriptor = useMemo(() => phaseDescriptors[phase], [phase]);
+  const descriptor = phaseDescriptors[state.status];
 
   useEffect(() => {
     return () => {
@@ -336,69 +394,102 @@ export default function RealtimeVoicePage() {
     timersRef.current = [];
   }
 
-  function queuePhase(nextPhase: RealtimePhase, delayMs: number) {
+  function dispatchEvent(event: VoiceSessionEvent) {
+    dispatch(event);
+  }
+
+  function queueEvent(event: VoiceSessionEvent, delayMs: number) {
     const timer = window.setTimeout(() => {
-      setPhase(nextPhase);
+      dispatchEvent(event);
       timersRef.current = timersRef.current.filter((activeTimer) => activeTimer !== timer);
     }, delayMs);
 
     timersRef.current.push(timer);
   }
 
-  function startCycleFromListening() {
+  function startConnectionFlow() {
     clearTimers();
-    setPhase("thinking");
-    queuePhase("tool_running", 1200);
-    queuePhase("speaking", 2400);
-    queuePhase("listening", 4200);
+    dispatchEvent({ type: "connect.request" });
+    queueEvent({ type: "connected" }, 800);
+    queueEvent({ type: "mic.start" }, 1400);
+  }
+
+  function startLearnerTurnFlow() {
+    clearTimers();
+    dispatchEvent({ type: "speech.detected" });
+    queueEvent({ type: "tool.call.started" }, 1200);
+    queueEvent({ type: "tool.call.finished" }, 2400);
+    queueEvent({ type: "response.started" }, 2600);
+    queueEvent({ type: "response.ended" }, 4200);
+    queueEvent({ type: "mic.start" }, 5000);
   }
 
   function handlePrimaryAction() {
-    if (phase === "idle" || phase === "error") {
-      clearTimers();
-      setPhase("connecting");
-      queuePhase("listening", 1400);
-      return;
+    switch (state.status) {
+      case "idle":
+      case "interrupted":
+      case "disconnected":
+      case "error":
+        startConnectionFlow();
+        return;
+      case "connecting":
+        clearTimers();
+        dispatchEvent({ type: "connected" });
+        queueEvent({ type: "mic.start" }, 250);
+        return;
+      case "connected":
+        clearTimers();
+        dispatchEvent({ type: "mic.start" });
+        return;
+      case "listening":
+        startLearnerTurnFlow();
+        return;
+      case "thinking":
+        clearTimers();
+        dispatchEvent({ type: "response.started" });
+        queueEvent({ type: "response.ended" }, 1600);
+        queueEvent({ type: "mic.start" }, 2400);
+        return;
+      case "tool_running":
+        clearTimers();
+        dispatchEvent({ type: "tool.call.finished" });
+        queueEvent({ type: "response.started" }, 250);
+        queueEvent({ type: "response.ended" }, 1800);
+        queueEvent({ type: "mic.start" }, 2600);
+        return;
+      case "speaking":
+        clearTimers();
+        dispatchEvent({ type: "response.ended" });
+        queueEvent({ type: "mic.start" }, 500);
+        return;
     }
-
-    if (phase === "listening") {
-      startCycleFromListening();
-      return;
-    }
-
-    if (phase === "connecting") {
-      clearTimers();
-      setPhase("listening");
-      return;
-    }
-
-    if (phase === "thinking") {
-      clearTimers();
-      setPhase("tool_running");
-      queuePhase("speaking", 1200);
-      queuePhase("listening", 2800);
-      return;
-    }
-
-    if (phase === "tool_running") {
-      clearTimers();
-      setPhase("speaking");
-      queuePhase("listening", 1800);
-      return;
-    }
-
-    clearTimers();
-    setPhase("listening");
   }
 
-  function handleReset() {
+  function handleDisconnect() {
     clearTimers();
-    setPhase("idle");
+    dispatchEvent({ type: "disconnect" });
   }
 
-  function handleError() {
+  function handleInterrupt() {
     clearTimers();
-    setPhase("error");
+    if (
+      state.status === "connecting" ||
+      state.status === "connected" ||
+      state.status === "listening" ||
+      state.status === "thinking" ||
+      state.status === "speaking" ||
+      state.status === "tool_running"
+    ) {
+      dispatchEvent({ type: "interruption" });
+    }
+  }
+
+  function handleRecoverableError() {
+    clearTimers();
+    dispatchEvent({
+      type: "recoverable.error",
+      message: "Connection dropped during a mock realtime turn.",
+    });
   }
 
   return (
@@ -410,8 +501,8 @@ export default function RealtimeVoicePage() {
             <h1 className="session-title">A visible shell for future live conversation.</h1>
             <p className="lede">
               This screen uses local mocked state only. It demonstrates connection, turn-taking,
-              assistant activity, tool visibility, and error recovery without backend or provider
-              wiring.
+              assistant activity, interruption handling, tool visibility, and error recovery
+              without backend or provider wiring.
             </p>
           </div>
           <div className="session-status-block">
@@ -421,37 +512,56 @@ export default function RealtimeVoicePage() {
           </div>
         </header>
 
-        {phase === "error" ? (
+        {state.status === "error" ? (
           <div className="voice-error-banner" role="alert">
             <div>
-              <p className="panel-label">Recoverable error</p>
-              <p className="voice-error-title">Connection dropped during a mock realtime turn.</p>
+              <p className="panel-label">{state.recoverable ? "Recoverable error" : "Fatal error"}</p>
+              <p className="voice-error-title">{state.message}</p>
               <p className="voice-status-copy">
-                Use Resume Session to return to the connecting flow. No transcript data is lost in
-                this demo state.
+                {state.recoverable
+                  ? "Use Resume Session to return to the connecting flow. No transcript data is lost in this demo state."
+                  : "Reconnect to start a fresh mock session after a fatal failure."}
               </p>
             </div>
             <button className="secondary-button" type="button" onClick={handlePrimaryAction}>
-              Resume Session
+              {state.recoverable ? "Resume Session" : "Reconnect Session"}
+            </button>
+          </div>
+        ) : null}
+
+        {state.status === "interrupted" ? (
+          <div className="voice-error-banner" role="status">
+            <div>
+              <p className="panel-label">Interrupted</p>
+              <p className="voice-error-title">
+                Mock interruption paused the session during {state.interruptedFrom.replace("_", " ")}.
+              </p>
+              <p className="voice-status-copy">
+                Reconnect to return to the deterministic connect and listen flow.
+              </p>
+            </div>
+            <button className="secondary-button" type="button" onClick={handlePrimaryAction}>
+              Reconnect Session
             </button>
           </div>
         ) : null}
 
         <section className="voice-grid voice-grid-top">
-          <ConnectionStatus phase={phase} />
-          <AssistantStateIndicator phase={phase} />
+          <ConnectionStatus status={state.status} />
+          <AssistantStateIndicator status={state.status} />
         </section>
 
         <section className="voice-grid voice-grid-main">
-          <TranscriptPanel phase={phase} />
+          <TranscriptPanel state={state} />
           <div className="voice-side-column">
             <MicrophoneControl
-              phase={phase}
+              state={state}
               onPrimaryAction={handlePrimaryAction}
-              onReset={handleReset}
-              onError={handleError}
+              onDisconnect={handleDisconnect}
+              onInterrupt={handleInterrupt}
+              onRecoverableError={handleRecoverableError}
             />
-            <ToolPanel phase={phase} />
+            <ToolPanel status={state.status} />
           </div>
         </section>
       </section>
