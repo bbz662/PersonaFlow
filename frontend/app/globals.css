@@ -360,6 +360,12 @@ h1 {
 .session-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+
+.session-actions-start {
+  justify-content: flex-start;
 }
 
 .end-session-button {
@@ -377,13 +383,39 @@ h1 {
   transition:
     transform 160ms ease,
     background-color 160ms ease,
-    border-color 160ms ease;
+    border-color 160ms ease,
+    opacity 160ms ease;
+  cursor: pointer;
 }
 
-.end-session-button:hover {
+.end-session-button:hover:not(:disabled) {
   transform: translateY(-1px);
   background: rgba(255, 250, 240, 0.9);
   border-color: rgba(92, 73, 44, 0.28);
+}
+
+.end-session-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.processing-card {
+  max-width: 720px;
+}
+
+.processing-copy {
+  max-width: 42rem;
+}
+
+.processing-details {
+  padding: 18px;
+  border-radius: 18px;
+  background: var(--surface-strong);
+  border: 1px solid rgba(92, 73, 44, 0.1);
+}
+
+.processing-link {
+  text-decoration: none;
 }
 
 @media (max-width: 760px) {

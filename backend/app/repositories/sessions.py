@@ -42,6 +42,16 @@ class SessionRepository:
         session_doc.setdefault("started_at", datetime.now(timezone.utc).isoformat())
         self.get_session_ref(session_id).set(session_doc)
 
+    def get_session(self, session_id: str) -> dict[str, object] | None:
+        snapshot = self.get_session_ref(session_id).get()
+        if not snapshot.exists:
+            return None
+
+        return snapshot.to_dict()
+
+    def update_session(self, session_id: str, payload: dict[str, object]) -> None:
+        self.get_session_ref(session_id).update(payload)
+
     def add_transcript_entry(
         self, session_id: str, entry_id: str, payload: dict[str, object]
     ) -> None:

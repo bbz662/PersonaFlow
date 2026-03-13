@@ -39,6 +39,7 @@ FIRESTORE_DATABASE_ID=(default)
 - `GET /healthz`
 - `POST /sessions/start`
 - `POST /sessions/{session_id}/transcript`
+- `POST /sessions/{session_id}/complete`
 
 ## Firestore scaffold
 
@@ -55,6 +56,7 @@ Current scope:
 - Firestore client setup is centralized in `app/core/firestore.py`
 - `SessionRepository` exposes document and collection references for sessions
 - transcript entries can be written directly to Firestore under the session subcollection
+- session completion updates the session document synchronously from `processing` to `completed`
 - phrase card persistence remains a placeholder for a later issue
 
 Transcript ingestion request shape:
@@ -79,6 +81,13 @@ Notes:
 - `entries` must include at least one transcript entry
 - `speaker` currently supports `user` and `agent`
 - `entry_id` is optional; the backend generates one when omitted
+
+Session completion behavior:
+
+- `ended_at` is recorded when the client ends the session
+- `processing_started_at` is recorded immediately before minimal post-session work begins
+- `completed_at` is recorded when the synchronous completion step finishes
+- the session status moves from `processing` to `completed` in Firestore
 
 Storage constraints:
 
