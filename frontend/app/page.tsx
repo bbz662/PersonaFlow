@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -75,14 +76,19 @@ export default function HomePage() {
             <li>Review personal phrases after the session</li>
             <li>No translation-oriented workflow</li>
           </ul>
-          <button
-            className="start-button"
-            type="button"
-            onClick={handleStartSession}
-            disabled={isStarting}
-          >
-            {isStarting ? "Starting..." : "Start Session"}
-          </button>
+          <div className="hero-actions">
+            <button
+              className="start-button"
+              type="button"
+              onClick={handleStartSession}
+              disabled={isStarting}
+            >
+              {isStarting ? "Starting..." : "Start Session"}
+            </button>
+            <Link className="secondary-button hero-link-button" href="/realtime">
+              Open Realtime Demo
+            </Link>
+          </div>
           <p className="button-note">
             Starts an anonymous Japanese-to-English practice session.
           </p>
