@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.repositories.sessions import SessionRepository
 from app.services.phrase_cards import PhraseCardService
+from app.services.session_summary import SessionSummaryService
 
 
 class StartSessionRequest(BaseModel):
@@ -71,6 +72,19 @@ class CompleteSessionResponse(BaseModel):
     card_count: int
 
 
+class SessionMetadataResponse(BaseModel):
+    session_id: str
+    status: str
+    source_language: str | None = None
+    target_language: str | None = None
+    started_at: str | None = None
+    ended_at: str | None = None
+    processing_started_at: str | None = None
+    completed_at: str | None = None
+    card_count: int = 0
+    session_summary: str | None = None
+
+
 class PhraseCardResponse(BaseModel):
     card_id: str
     source_text: str
@@ -97,6 +111,12 @@ def get_phrase_card_service(
     repository: SessionRepository = Depends(get_session_repository),
 ) -> PhraseCardService:
     return PhraseCardService(repository=repository)
+
+
+def get_session_summary_service(
+    repository: SessionRepository = Depends(get_session_repository),
+) -> SessionSummaryService:
+    return SessionSummaryService(repository=repository)
 
 
 @router.post("/start", response_model=StartSessionResponse, status_code=status.HTTP_201_CREATED)
@@ -171,6 +191,7 @@ def complete_session(
     session_id: str,
     repository: SessionRepository = Depends(get_session_repository),
     phrase_card_service: PhraseCardService = Depends(get_phrase_card_service),
+    session_summary_service: SessionSummaryService = Depends(get_session_summary_service),
 ) -> CompleteSessionResponse:
     if repository.get_session(session_id) is None:
         raise HTTPException(
@@ -199,14 +220,16 @@ def complete_session(
             detail=str(exc),
         ) from exc
 
-    repository.update_session(
-        session_id,
-        {
-            "status": "completed",
-            "completed_at": completed_at,
-            "card_count": len(phrase_cards),
-        },
-    )
+    session_summary = session_summary_service.generate_for_session(session_id)
+    completed_payload: dict[str, object] = {
+        "status": "completed",
+        "completed_at": completed_at,
+        "card_count": len(phrase_cards),
+    }
+    if session_summary:
+        completed_payload["session_summary"] = session_summary
+
+    repository.update_session(session_id, completed_payload)
 
     return CompleteSessionResponse(
         session_id=session_id,
@@ -215,6 +238,49 @@ def complete_session(
         processing_started_at=processing_started_at,
         completed_at=completed_at,
         card_count=len(phrase_cards),
+    )
+
+
+@router.get(
+    "/{session_id}",
+    response_model=SessionMetadataResponse,
+    status_code=status.HTTP_200_OK,
+)
+def get_session_metadata(
+    session_id: str,
+    repository: SessionRepository = Depends(get_session_repository),
+    session_summary_service: SessionSummaryService = Depends(get_session_summary_service),
+) -> SessionMetadataResponse:
+    session = repository.get_session(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found.",
+        )
+
+    session_summary = str(session.get("session_summary", "") or "").strip() or None
+    if session_summary is None and session.get("status") == "completed":
+        session_summary = session_summary_service.generate_for_session(session_id)
+        if session_summary:
+            repository.update_session(session_id, {"session_summary": session_summary})
+
+    return SessionMetadataResponse(
+        session_id=str(session.get("session_id") or session_id),
+        status=str(session.get("status") or "unknown"),
+        source_language=str(session.get("source_language"))
+        if session.get("source_language") is not None
+        else None,
+        target_language=str(session.get("target_language"))
+        if session.get("target_language") is not None
+        else None,
+        started_at=str(session.get("started_at")) if session.get("started_at") is not None else None,
+        ended_at=str(session.get("ended_at")) if session.get("ended_at") is not None else None,
+        processing_started_at=str(session.get("processing_started_at"))
+        if session.get("processing_started_at") is not None
+        else None,
+        completed_at=str(session.get("completed_at")) if session.get("completed_at") is not None else None,
+        card_count=int(session.get("card_count") or 0),
+        session_summary=session_summary,
     )
 
 
