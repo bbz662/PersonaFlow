@@ -260,6 +260,19 @@ h1 {
   color: var(--muted);
 }
 
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.hero-link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .error-note {
   margin: 0;
   color: var(--error);
@@ -552,12 +565,225 @@ h1 {
   text-decoration: none;
 }
 
-@media (max-width: 760px) {
-  .hero-card {
+.realtime-demo-card {
+  width: min(1180px, 100%);
+}
+
+.voice-grid {
+  display: grid;
+  gap: 20px;
+}
+
+.voice-grid-top {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.voice-grid-main {
+  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.9fr);
+  align-items: start;
+}
+
+.voice-side-column {
+  display: grid;
+  gap: 20px;
+}
+
+.voice-card {
+  padding: 22px;
+  border-radius: 22px;
+  background: var(--surface-strong);
+  border: 1px solid rgba(92, 73, 44, 0.1);
+}
+
+.voice-panel-tall {
+  min-height: 560px;
+}
+
+.voice-status-card {
+  display: grid;
+  gap: 16px;
+}
+
+.voice-status-row,
+.voice-mic-shell {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.voice-indicator {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  box-shadow: 0 0 0 6px rgba(92, 73, 44, 0.08);
+}
+
+.voice-indicator-neutral {
+  background: #8f7b62;
+}
+
+.voice-indicator-active {
+  background: #4d8451;
+}
+
+.voice-indicator-warn {
+  background: #b67a2e;
+}
+
+.voice-indicator-error {
+  background: var(--error);
+}
+
+.voice-status-value,
+.voice-state-title,
+.voice-error-title,
+.voice-tool-name {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.voice-status-copy,
+.voice-tool-summary {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.voice-phase-pill,
+.voice-tool-badge {
+  width: fit-content;
+  margin: 14px 0 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.voice-phase-pill {
+  background: rgba(182, 92, 46, 0.1);
+  color: var(--brand-strong);
+}
+
+.voice-panel-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.voice-transcript-feed {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.voice-transcript-entry {
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(92, 73, 44, 0.1);
+  background: rgba(255, 248, 236, 0.72);
+}
+
+.voice-transcript-entry.speaker-assistant {
+  background: rgba(182, 92, 46, 0.08);
+}
+
+.voice-transcript-entry.speaker-system {
+  background: rgba(92, 73, 44, 0.06);
+}
+
+.voice-controls-card {
+  display: grid;
+  gap: 18px;
+}
+
+.voice-mic-button {
+  width: 82px;
+  height: 82px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: #fffaf5;
+  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-strong) 100%);
+  box-shadow: 0 16px 34px rgba(143, 67, 29, 0.24);
+}
+
+.voice-mic-button.phase-listening,
+.voice-mic-button.phase-speaking {
+  background: linear-gradient(135deg, #4f8851 0%, #2f6233 100%);
+}
+
+.voice-mic-button.phase-error {
+  background: linear-gradient(135deg, #bf6445 0%, #96391f 100%);
+}
+
+.voice-control-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.voice-tool-running {
+  background: rgba(182, 122, 46, 0.14);
+  color: #8a571a;
+}
+
+.voice-tool-completed {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.voice-tool-queued {
+  background: rgba(92, 73, 44, 0.08);
+  color: var(--muted);
+}
+
+.voice-tool-block,
+.voice-tool-result {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: rgba(255, 248, 236, 0.72);
+  border: 1px solid rgba(92, 73, 44, 0.1);
+}
+
+.voice-error-banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  padding: 18px 20px;
+  border-radius: 20px;
+  border: 1px solid rgba(163, 63, 42, 0.18);
+  background: rgba(163, 63, 42, 0.08);
+}
+
+@media (max-width: 960px) {
+  .hero-card,
+  .voice-grid-top,
+  .voice-grid-main {
     grid-template-columns: 1fr;
-    padding: 20px;
   }
 
+  .voice-panel-tall {
+    min-height: auto;
+  }
+
+  .voice-error-banner,
+  .voice-panel-header,
+  .live-session-header,
+  .results-header {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 760px) {
   .live-session-card,
   .results-card {
     padding: 20px;
@@ -584,7 +810,9 @@ h1 {
 
   .transport-actions,
   .session-actions,
-  .card-browser {
+  .card-browser,
+  .hero-actions,
+  .voice-control-actions {
     justify-content: stretch;
   }
 
