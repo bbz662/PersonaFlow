@@ -35,3 +35,40 @@ variable "artifact_registry_format" {
     error_message = "artifact_registry_format must be DOCKER for this scaffold."
   }
 }
+
+variable "backend_service_name" {
+  description = "Cloud Run service name for the PersonaFlow backend."
+  type        = string
+  default     = "personaflow-backend"
+}
+
+variable "backend_image_name" {
+  description = "Container image name inside the Artifact Registry repository."
+  type        = string
+  default     = "backend"
+}
+
+variable "backend_image_tag" {
+  description = "Container image tag to deploy for MVP validation. A mutable tag such as latest is acceptable."
+  type        = string
+  default     = "latest"
+}
+
+variable "backend_app_env" {
+  description = "APP_ENV value passed to the backend container."
+  type        = string
+  default     = "production"
+}
+
+variable "backend_gemini_api_key" {
+  description = "GEMINI_API_KEY value passed to Cloud Run for MVP validation."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "backend_gemini_model" {
+  description = "GEMINI_MODEL value passed to the backend container."
+  type        = string
+  default     = "gemini-2.0-flash"
+}

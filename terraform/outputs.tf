@@ -27,3 +27,18 @@ output "artifact_registry_repository_url" {
   description = "Artifact Registry repository URL prefix for manual image tagging and push."
   value       = "${google_artifact_registry_repository.backend.location}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.backend.repository_id}"
 }
+
+output "backend_image_reference" {
+  description = "Artifact Registry image reference expected by the Cloud Run backend service."
+  value       = local.backend_image
+}
+
+output "backend_service_name" {
+  description = "Cloud Run backend service name."
+  value       = google_cloud_run_v2_service.backend.name
+}
+
+output "backend_service_url" {
+  description = "Cloud Run backend service URL for validation."
+  value       = google_cloud_run_v2_service.backend.uri
+}
