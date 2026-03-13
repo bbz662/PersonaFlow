@@ -1,8 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import {
   LiveSessionTransport,
@@ -24,7 +23,7 @@ type SessionCompletionResponse = {
   completed_at: string;
 };
 
-type SessionViewState = "live" | "processing" | "completed";
+type SessionViewState = "live" | "processing";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -50,14 +49,13 @@ function buildFeedEntry(event: SessionTransportEvent, index: number): EventFeedE
 
 export default function LiveSessionPage() {
   const params = useParams<{ sessionId: string }>();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const transportRef = useRef<LiveSessionTransport | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>("ended");
   const [eventFeed, setEventFeed] = useState<EventFeedEntry[]>([]);
   const [viewState, setViewState] = useState<SessionViewState>("live");
   const [completionError, setCompletionError] = useState<string | null>(null);
-  const [completionPayload, setCompletionPayload] =
-    useState<SessionCompletionResponse | null>(null);
 
   const sessionId = params.sessionId;
   const startedAt = searchParams.get("startedAt");
@@ -117,7 +115,7 @@ export default function LiveSessionPage() {
   }
 
   async function handleEndSession() {
-    if (isEnding || viewState === "completed") {
+    if (isEnding) {
       return;
     }
 
@@ -132,12 +130,13 @@ export default function LiveSessionPage() {
       });
 
       if (!response.ok) {
-        throw new Error("Unable to end the session right now.");
+        throw new Error("Unable to end a session right now.");
       }
 
       const payload = (await response.json()) as SessionCompletionResponse;
-      setCompletionPayload(payload);
-      setViewState("completed");
+      router.push(
+        `/session/${payload.session_id}/results?completedAt=${encodeURIComponent(payload.completed_at)}`,
+      );
     } catch (error) {
       setViewState("live");
       setCompletionError(
@@ -148,43 +147,26 @@ export default function LiveSessionPage() {
     }
   }
 
-  if (viewState !== "live") {
+  if (viewState === "processing") {
     return (
       <main className="session-shell">
         <section className="live-session-card processing-card">
           <p className="eyebrow">Post-session</p>
-          <h1 className="session-title">
-            {viewState === "processing"
-              ? "Wrapping up your session."
-              : "Session processing finished."}
-          </h1>
+          <h1 className="session-title">Wrapping up your session.</h1>
           <p className="lede processing-copy">
-            {viewState === "processing"
-              ? "Ending the live session and triggering minimal post-session processing."
-              : "The live session has ended and the backend marked this session as completed."}
+            Ending the live session and preparing the initial review screen.
           </p>
-          {completionPayload ? (
-            <div className="processing-details" aria-live="polite">
-              <p className="session-status-label">Session status</p>
-              <p className="session-status-value">Completed</p>
-              <p className="session-meta">
-                Ended {new Date(completionPayload.ended_at).toLocaleString()}
-              </p>
-              <p className="session-meta">
-                Completed {new Date(completionPayload.completed_at).toLocaleString()}
-              </p>
-            </div>
-          ) : null}
+          <div className="processing-details" aria-live="polite">
+            <p className="session-status-label">Session status</p>
+            <p className="session-status-value">Processing</p>
+            <p className="session-meta">
+              The results screen will open automatically when the request completes.
+            </p>
+          </div>
           <div className="session-actions session-actions-start">
-            {viewState === "processing" ? (
-              <button className="start-button" type="button" disabled>
-                Processing...
-              </button>
-            ) : (
-              <Link className="start-button processing-link" href="/">
-                Back to home
-              </Link>
-            )}
+            <button className="start-button" type="button" disabled>
+              Processing...
+            </button>
           </div>
         </section>
       </main>
