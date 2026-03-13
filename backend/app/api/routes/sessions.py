@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Body, Depends, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.repositories.sessions import SessionRepository
 
@@ -16,6 +17,48 @@ class StartSessionResponse(BaseModel):
     session_id: str
     status: str
     started_at: str
+
+
+class TranscriptEntryRequest(BaseModel):
+    entry_id: str | None = None
+    speaker: Literal["user", "agent"]
+    text: str
+    language: str
+    timestamp: datetime
+    turn_index: int = Field(ge=0)
+
+    @field_validator("text", "language")
+    @classmethod
+    def validate_required_text_fields(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be empty")
+        return stripped
+
+    @field_validator("entry_id")
+    @classmethod
+    def validate_entry_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be empty")
+        return stripped
+
+
+class TranscriptIngestionRequest(BaseModel):
+    entries: list[TranscriptEntryRequest] = Field(min_length=1)
+
+
+class TranscriptEntryResponse(BaseModel):
+    entry_id: str
+
+
+class TranscriptIngestionResponse(BaseModel):
+    session_id: str
+    stored_count: int
+    entries: list[TranscriptEntryResponse]
 
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -50,4 +93,39 @@ def start_session(
         session_id=session_id,
         status=session_status,
         started_at=started_at,
+    )
+
+
+@router.post(
+    "/{session_id}/transcript",
+    response_model=TranscriptIngestionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def ingest_transcript(
+    session_id: str,
+    payload: TranscriptIngestionRequest,
+    repository: SessionRepository = Depends(get_session_repository),
+) -> TranscriptIngestionResponse:
+    stored_entries: list[TranscriptEntryResponse] = []
+
+    for entry in payload.entries:
+        entry_id = entry.entry_id or str(uuid4())
+        repository.add_transcript_entry(
+            session_id,
+            entry_id,
+            {
+                "entry_id": entry_id,
+                "speaker": entry.speaker,
+                "text": entry.text,
+                "language": entry.language,
+                "timestamp": entry.timestamp.isoformat(),
+                "turn_index": entry.turn_index,
+            },
+        )
+        stored_entries.append(TranscriptEntryResponse(entry_id=entry_id))
+
+    return TranscriptIngestionResponse(
+        session_id=session_id,
+        stored_count=len(stored_entries),
+        entries=stored_entries,
     )
