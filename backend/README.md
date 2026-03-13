@@ -15,10 +15,11 @@ sudo apt install python3-venv python3-pip  # Ubuntu/WSL only, if missing
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+python -m app.main
 ```
 
-The API will start on `http://127.0.0.1:8000` by default.
+The API starts on `http://127.0.0.1:8000` by default for local development. The
+application binds to `0.0.0.0` unless you override `APP_HOST`.
 
 ## Docker
 
@@ -37,9 +38,24 @@ docker run --rm -p 8000:8080 \
   personaflow-backend
 ```
 
-The container listens on `0.0.0.0:$PORT`, which matches Cloud Run expectations.
-Set any required runtime environment variables with additional `-e` flags when validating
-Firestore or Gemini-backed flows.
+Run with Firestore or Gemini configuration:
+
+```bash
+docker run --rm -p 8000:8080 \
+  -e PORT=8080 \
+  -e GOOGLE_CLOUD_PROJECT=your-project-id \
+  -e FIRESTORE_DATABASE_ID='(default)' \
+  -e GEMINI_API_KEY=your-gemini-api-key \
+  -e GEMINI_MODEL=gemini-2.0-flash \
+  personaflow-backend
+```
+
+The container listens on `0.0.0.0:$PORT`, which matches Cloud Run runtime
+expectations. Validate the startup path with:
+
+```bash
+curl http://127.0.0.1:8000/healthz
+```
 
 ## Environment variables
 
@@ -49,13 +65,45 @@ local development, but repository usage requires the Firestore project settings 
 ```bash
 APP_NAME=PersonaFlow API
 APP_ENV=development
-APP_HOST=127.0.0.1
+APP_HOST=0.0.0.0
 PORT=8000
 GOOGLE_CLOUD_PROJECT=
 FIRESTORE_DATABASE_ID=(default)
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-2.0-flash
 ```
+
+Expected runtime behavior:
+
+- `PORT` should be provided by Cloud Run in deployment and can be set manually for
+  local Docker validation.
+- `APP_HOST` should remain `0.0.0.0` for containers.
+- `GOOGLE_CLOUD_PROJECT` and `FIRESTORE_DATABASE_ID` are only required when testing
+  Firestore-backed routes.
+- `GEMINI_API_KEY` is only required when validating Gemini-backed phrase generation.
+
+## Manual Artifact Registry push flow
+
+This repository does not automate image publishing yet. The expected later manual
+flow is:
+
+```bash
+gcloud auth configure-docker asia-northeast1-docker.pkg.dev
+
+docker build -t personaflow-backend ./backend
+
+docker tag personaflow-backend \
+  asia-northeast1-docker.pkg.dev/PROJECT_ID/REPOSITORY/personaflow-backend:TAG
+
+docker push \
+  asia-northeast1-docker.pkg.dev/PROJECT_ID/REPOSITORY/personaflow-backend:TAG
+```
+
+Assumptions for that flow:
+
+- an Artifact Registry repository already exists
+- Docker is authenticated through `gcloud`
+- Cloud Run deployment will reference the pushed image separately
 
 ## Available routes
 
