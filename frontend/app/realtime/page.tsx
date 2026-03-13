@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 
+import { createAudioIO, createSineWaveChunk, type AudioIO, type AudioIOMode } from "../../lib/audio-io";
 import {
   initialVoiceSessionState,
   voiceSessionReducer,
@@ -130,7 +131,7 @@ const baseTranscript: TranscriptEntry[] = [
 const listeningTranscript: TranscriptEntry = {
   id: "listening-prompt",
   speaker: "system",
-  text: "Microphone is armed in mock mode. Waiting for the next learner turn.",
+  text: "Microphone is armed through the audio adapter. Waiting for the next learner turn.",
   detail: "Listening",
 };
 
@@ -306,6 +307,15 @@ function ToolPanel({ status }: { status: VoiceSessionStatus }) {
   );
 }
 
+function resolveAudioMode(): AudioIOMode {
+  if (typeof window === "undefined") {
+    return "mock";
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  return params.get("audio") === "browser" ? "browser" : "mock";
+}
+
 function primaryActionLabel(status: VoiceSessionStatus) {
   switch (status) {
     case "idle":
@@ -355,7 +365,9 @@ function MicrophoneControl({
         </button>
         <div>
           <p className="mic-status-title">{descriptor.title}</p>
-          <p className="mic-status-copy">Mock-only control surface. This does not access the real microphone.</p>
+          <p className="mic-status-copy">
+            Input and playback now route through the audio adapter layer for browser and mock modes.
+          </p>
         </div>
       </div>
       <div className="voice-control-actions">
@@ -378,24 +390,22 @@ function MicrophoneControl({
 
 export default function RealtimeVoicePage() {
   const [state, dispatch] = useReducer(voiceSessionReducer, initialVoiceSessionState);
+  const [audioMode, setAudioMode] = useState<AudioIOMode>("mock");
   const timersRef = useRef<number[]>([]);
+  const audioRef = useRef<AudioIO | null>(null);
+  const stateRef = useRef(state);
+  const learnerTurnQueuedRef = useRef(false);
+  const playbackActiveRef = useRef(false);
 
   const descriptor = phaseDescriptors[state.status];
 
-  useEffect(() => {
-    return () => {
-      timersRef.current.forEach((timer) => window.clearTimeout(timer));
-      timersRef.current = [];
-    };
-  }, []);
+  function dispatchEvent(event: VoiceSessionEvent) {
+    dispatch(event);
+  }
 
   function clearTimers() {
     timersRef.current.forEach((timer) => window.clearTimeout(timer));
     timersRef.current = [];
-  }
-
-  function dispatchEvent(event: VoiceSessionEvent) {
-    dispatch(event);
   }
 
   function queueEvent(event: VoiceSessionEvent, delayMs: number) {
@@ -407,8 +417,16 @@ export default function RealtimeVoicePage() {
     timersRef.current.push(timer);
   }
 
-  function startConnectionFlow() {
+  function interruptAudio() {
     clearTimers();
+    learnerTurnQueuedRef.current = false;
+    playbackActiveRef.current = false;
+    void audioRef.current?.stopInput();
+    audioRef.current?.flushPlayback();
+  }
+
+  function startConnectionFlow() {
+    interruptAudio();
     dispatchEvent({ type: "connect.request" });
     queueEvent({ type: "connected" }, 800);
     queueEvent({ type: "mic.start" }, 1400);
@@ -416,6 +434,8 @@ export default function RealtimeVoicePage() {
 
   function startLearnerTurnFlow() {
     clearTimers();
+    learnerTurnQueuedRef.current = true;
+    void audioRef.current?.stopInput();
     dispatchEvent({ type: "speech.detected" });
     queueEvent({ type: "tool.call.started" }, 1200);
     queueEvent({ type: "tool.call.finished" }, 2400);
@@ -423,6 +443,102 @@ export default function RealtimeVoicePage() {
     queueEvent({ type: "response.ended" }, 4200);
     queueEvent({ type: "mic.start" }, 5000);
   }
+
+  function streamPlaybackChunks() {
+    const audio = audioRef.current;
+
+    if (!audio || playbackActiveRef.current) {
+      return;
+    }
+
+    const playbackPlan = [
+      createSineWaveChunk({ frequencyHz: 220, durationMs: 220, phaseOffset: 0 }),
+      createSineWaveChunk({ frequencyHz: 246, durationMs: 220, phaseOffset: 4_000 }),
+      createSineWaveChunk({ frequencyHz: 261, durationMs: 220, phaseOffset: 8_000 }),
+    ];
+
+    playbackPlan.forEach((chunk, index) => {
+      const timer = window.setTimeout(() => {
+        void audio.pushPlaybackChunk(chunk);
+        timersRef.current = timersRef.current.filter((activeTimer) => activeTimer !== timer);
+      }, index * 150);
+
+      timersRef.current.push(timer);
+    });
+  }
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
+    const mode = resolveAudioMode();
+    setAudioMode(mode);
+    audioRef.current = createAudioIO({
+      mode,
+      callbacks: {
+        onInputChunk: () => {
+          if (stateRef.current.status !== "listening" || learnerTurnQueuedRef.current) {
+            return;
+          }
+
+          learnerTurnQueuedRef.current = true;
+          startLearnerTurnFlow();
+        },
+        onPlaybackStateChange: (playing) => {
+          playbackActiveRef.current = playing;
+        },
+      },
+    });
+
+    return () => {
+      clearTimers();
+      learnerTurnQueuedRef.current = false;
+      playbackActiveRef.current = false;
+      void audioRef.current?.dispose();
+      audioRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+
+    if (!audio) {
+      return;
+    }
+
+    if (state.status === "listening") {
+      learnerTurnQueuedRef.current = false;
+      void audio.startInput().catch(() => {
+        dispatch({
+          type: "recoverable.error",
+          message: "Unable to start audio input for the realtime demo.",
+        });
+      });
+      return;
+    }
+
+    void audio.stopInput().catch(() => {
+      dispatch({
+        type: "recoverable.error",
+        message: "Unable to stop audio input cleanly for the realtime demo.",
+      });
+    });
+
+    if (
+      state.status === "interrupted" ||
+      state.status === "disconnected" ||
+      state.status === "error" ||
+      state.status === "connected"
+    ) {
+      audio.flushPlayback();
+      playbackActiveRef.current = false;
+    }
+
+    if (state.status === "speaking") {
+      streamPlaybackChunks();
+    }
+  }, [state.status]);
 
   function handlePrimaryAction() {
     switch (state.status) {
@@ -459,6 +575,8 @@ export default function RealtimeVoicePage() {
         return;
       case "speaking":
         clearTimers();
+        audioRef.current?.flushPlayback();
+        playbackActiveRef.current = false;
         dispatchEvent({ type: "response.ended" });
         queueEvent({ type: "mic.start" }, 500);
         return;
@@ -466,12 +584,12 @@ export default function RealtimeVoicePage() {
   }
 
   function handleDisconnect() {
-    clearTimers();
+    interruptAudio();
     dispatchEvent({ type: "disconnect" });
   }
 
   function handleInterrupt() {
-    clearTimers();
+    interruptAudio();
     if (
       state.status === "connecting" ||
       state.status === "connected" ||
@@ -485,7 +603,7 @@ export default function RealtimeVoicePage() {
   }
 
   function handleRecoverableError() {
-    clearTimers();
+    interruptAudio();
     dispatchEvent({
       type: "recoverable.error",
       message: "Connection dropped during a mock realtime turn.",
@@ -508,7 +626,9 @@ export default function RealtimeVoicePage() {
           <div className="session-status-block">
             <p className="session-status-label">Demo phase</p>
             <p className="session-status-value">{descriptor.title}</p>
-            <p className="session-meta">{descriptor.detail}</p>
+            <p className="session-meta">
+              {descriptor.detail} Audio adapter: {audioMode}.
+            </p>
           </div>
         </header>
 
