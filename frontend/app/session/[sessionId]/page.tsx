@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
-import {
-  LiveSessionTransport,
-  type ConnectionState,
-  type SessionTransportEvent,
-} from "../../../lib/live-session-transport";
+import { createGeminiLiveClient } from "../../../lib/gemini-live-client";
+import type {
+  RealtimeConnectionState,
+  RealtimeSessionClient,
+  RealtimeSessionEvent,
+} from "../../../lib/realtime-session-client";
 
 type EventFeedEntry = {
   id: string;
@@ -28,31 +29,79 @@ type SessionViewState = "live" | "processing";
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
-const statusCopy: Record<ConnectionState, string> = {
-  connecting: "Opening the live conversation transport.",
-  connected: "Live transport is active and ready for minimal session events.",
-  failed: "The live transport could not connect. Try starting the session again.",
-  ended: "The live transport is not active.",
+const statusCopy: Record<RealtimeConnectionState, string> = {
+  connecting: "Opening the Gemini Live session.",
+  connected: "Gemini Live is active and ready for session events.",
+  failed: "The Gemini Live session could not connect. Try starting again.",
+  ended: "The Gemini Live session is not active.",
 };
 
-function formatStatusLabel(status: ConnectionState) {
+function formatStatusLabel(status: RealtimeConnectionState) {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-function buildFeedEntry(event: SessionTransportEvent, index: number): EventFeedEntry {
-  return {
-    id: `${event.kind}-${index}`,
-    speaker: event.speaker === "agent" ? "PersonaFlow" : "Session event",
-    text: event.text,
-  };
+function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEntry {
+  switch (event.type) {
+    case "connected":
+      return {
+        id: `connected-${index}`,
+        speaker: "Session",
+        text: `Gemini Live connected for session ${event.sessionId}.`,
+      };
+
+    case "transcript.received":
+      return {
+        id: `transcript-${index}`,
+        speaker:
+          event.speaker === "agent"
+            ? "PersonaFlow"
+            : event.speaker === "user"
+              ? "You"
+              : "Session event",
+        text: event.text,
+      };
+
+    case "response.audio":
+      return {
+        id: `audio-${index}`,
+        speaker: "PersonaFlow audio",
+        text: `Received ${event.chunk.samples.length} audio samples from the model output.`,
+      };
+
+    case "tool.call.requested":
+      return {
+        id: `tool-${index}`,
+        speaker: "Tool request",
+        text: `${event.name} requested by Gemini Live.`,
+      };
+
+    case "session.closed":
+      return {
+        id: `closed-${index}`,
+        speaker: "Session",
+        text:
+          event.reason === "client"
+            ? "Gemini Live session closed by the client."
+            : "Gemini Live session closed by the provider.",
+      };
+
+    case "recoverable.error":
+    case "fatal.error":
+      return {
+        id: `error-${index}`,
+        speaker: "Error",
+        text: event.message,
+      };
+  }
 }
 
 export default function LiveSessionPage() {
   const params = useParams<{ sessionId: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const transportRef = useRef<LiveSessionTransport | null>(null);
-  const [connectionState, setConnectionState] = useState<ConnectionState>("ended");
+  const clientRef = useRef<RealtimeSessionClient | null>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
+  const [connectionState, setConnectionState] = useState<RealtimeConnectionState>("ended");
   const [eventFeed, setEventFeed] = useState<EventFeedEntry[]>([]);
   const [viewState, setViewState] = useState<SessionViewState>("live");
   const [completionError, setCompletionError] = useState<string | null>(null);
@@ -74,12 +123,14 @@ export default function LiveSessionPage() {
 
   useEffect(() => {
     return () => {
-      transportRef.current?.disconnect();
-      transportRef.current = null;
+      unsubscribeRef.current?.();
+      clientRef.current?.disconnect();
+      unsubscribeRef.current = null;
+      clientRef.current = null;
     };
   }, []);
 
-  function appendEvent(event: SessionTransportEvent) {
+  function appendEvent(event: RealtimeSessionEvent) {
     setEventFeed((current) => [...current, buildFeedEntry(event, current.length)]);
   }
 
@@ -88,30 +139,23 @@ export default function LiveSessionPage() {
       return;
     }
 
+    unsubscribeRef.current?.();
+    clientRef.current?.disconnect();
     setEventFeed([]);
 
-    const transport = new LiveSessionTransport({
+    const client = createGeminiLiveClient({
       sessionId,
       apiBaseUrl: API_BASE_URL,
-      onConnectionStateChange: (state) => {
-        setConnectionState(state);
-
-        if (state === "connected") {
-          transport.sendEvent({
-            kind: "client_ready",
-            text: "Live session screen connected and ready for transcript events.",
-          });
-        }
-      },
-      onEvent: appendEvent,
+      onConnectionStateChange: setConnectionState,
     });
 
-    transportRef.current = transport;
-    transport.connect();
+    unsubscribeRef.current = client.subscribe(appendEvent);
+    clientRef.current = client;
+    client.connect();
   }
 
   function handleStopConnection() {
-    transportRef.current?.disconnect();
+    clientRef.current?.disconnect();
   }
 
   async function handleEndSession() {
@@ -121,8 +165,10 @@ export default function LiveSessionPage() {
 
     setCompletionError(null);
     setViewState("processing");
-    transportRef.current?.disconnect();
-    transportRef.current = null;
+    unsubscribeRef.current?.();
+    clientRef.current?.disconnect();
+    unsubscribeRef.current = null;
+    clientRef.current = null;
 
     try {
       const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/complete`, {
@@ -191,7 +237,7 @@ export default function LiveSessionPage() {
 
         <section className="session-panels" aria-label="Live session details">
           <div className="session-panel">
-            <p className="panel-label">Live transport</p>
+            <p className="panel-label">Gemini Live</p>
             <div className="mic-status">
               <span
                 className={`mic-indicator mic-indicator-${connectionState}`}
@@ -230,8 +276,7 @@ export default function LiveSessionPage() {
               <div>
                 <p className="panel-label">Session events</p>
                 <p className="transcript-subtitle">
-                  Minimal live transport events land here now. Transcript capture
-                  and agent response rendering can build on this feed next.
+                  Typed app-level events from the Gemini Live boundary land here.
                 </p>
               </div>
               <p className="transcript-session-id">Session {sessionId}</p>
@@ -249,7 +294,7 @@ export default function LiveSessionPage() {
                 <div className="empty-feed">
                   <p className="transcript-speaker">No live events yet</p>
                   <p className="transcript-text">
-                    Start the connection to verify the live session transport.
+                    Start the connection to verify the Gemini Live provider boundary.
                   </p>
                 </div>
               )}

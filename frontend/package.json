@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --experimental-strip-types --test lib/voice-session-state.test.ts lib/audio-io.test.ts"
+    "test": "node --experimental-strip-types --test lib/voice-session-state.test.ts lib/audio-io.test.ts lib/gemini-live-client.test.ts"
   },
   "dependencies": {
     "next": "^14.2.0",
