@@ -1,0 +1,5 @@
+project_id                      = "your-gcp-project-id"
+region                          = "asia-northeast1"
+firestore_location              = "nam5"
+firestore_database_id           = "(default)"
+artifact_registry_repository_id = "personaflow-validation"
