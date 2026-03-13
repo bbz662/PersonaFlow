@@ -57,9 +57,30 @@ class SessionRepository:
     ) -> None:
         self.list_transcript_entries_ref(session_id).document(entry_id).set(payload)
 
+    def list_transcript_entries(self, session_id: str) -> list[dict[str, object]]:
+        snapshots = self.list_transcript_entries_ref(session_id).stream()
+        entries = [snapshot.to_dict() for snapshot in snapshots]
+        return sorted(
+            entries,
+            key=lambda entry: (
+                int(entry.get("turn_index", 0)),
+                str(entry.get("timestamp", "")),
+                str(entry.get("entry_id", "")),
+            ),
+        )
+
     def add_phrase_card(
         self, session_id: str, card_id: str, payload: dict[str, object]
     ) -> None:
-        raise NotImplementedError(
-            "Phrase card persistence will be implemented in a future session issue."
+        self.list_phrase_cards_ref(session_id).document(card_id).set(payload)
+
+    def list_phrase_cards(self, session_id: str) -> list[dict[str, object]]:
+        snapshots = self.list_phrase_cards_ref(session_id).stream()
+        cards = [snapshot.to_dict() for snapshot in snapshots]
+        return sorted(
+            cards,
+            key=lambda card: (
+                str(card.get("created_at", "")),
+                str(card.get("card_id", "")),
+            ),
         )

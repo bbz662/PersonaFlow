@@ -4,10 +4,11 @@ from unittest.mock import ANY, Mock
 try:
     from fastapi.testclient import TestClient
 
-    from app.api.routes.sessions import get_session_repository
+    from app.api.routes.sessions import get_phrase_card_service, get_session_repository
     from app.main import create_app
 except ModuleNotFoundError:
     TestClient = None
+    get_phrase_card_service = None
     get_session_repository = None
     create_app = None
 
@@ -137,6 +138,33 @@ class SessionApiTests(unittest.TestCase):
     def test_complete_session_marks_processing_then_completed(self) -> None:
         repository = Mock()
         repository.get_session.return_value = {"session_id": "session-123"}
+        repository.list_phrase_cards.return_value = []
+        repository.list_transcript_entries.return_value = [
+            {
+                "entry_id": "entry-1",
+                "speaker": "user",
+                "text": "I always need a little time to warm up in new groups.",
+                "language": "en",
+                "timestamp": "2026-03-13T10:00:00+00:00",
+                "turn_index": 0,
+            },
+            {
+                "entry_id": "entry-2",
+                "speaker": "user",
+                "text": "Once I get comfortable, I talk a lot more.",
+                "language": "en",
+                "timestamp": "2026-03-13T10:00:15+00:00",
+                "turn_index": 1,
+            },
+            {
+                "entry_id": "entry-3",
+                "speaker": "user",
+                "text": "I like keeping things relaxed instead of too formal.",
+                "language": "en",
+                "timestamp": "2026-03-13T10:00:30+00:00",
+                "turn_index": 2,
+            },
+        ]
         app = create_app()
         app.dependency_overrides[get_session_repository] = lambda: repository
         client = TestClient(app)
@@ -150,6 +178,7 @@ class SessionApiTests(unittest.TestCase):
         self.assertTrue(payload["ended_at"])
         self.assertTrue(payload["processing_started_at"])
         self.assertTrue(payload["completed_at"])
+        self.assertEqual(payload["card_count"], 3)
         repository.get_session.assert_called_once_with("session-123")
         repository.update_session.assert_any_call(
             "session-123",
@@ -164,9 +193,11 @@ class SessionApiTests(unittest.TestCase):
             {
                 "status": "completed",
                 "completed_at": payload["completed_at"],
+                "card_count": 3,
             },
         )
         self.assertEqual(repository.update_session.call_count, 2)
+        self.assertEqual(repository.add_phrase_card.call_count, 3)
 
     def test_complete_session_returns_not_found_for_missing_session(self) -> None:
         repository = Mock()
@@ -181,6 +212,64 @@ class SessionApiTests(unittest.TestCase):
         self.assertEqual(response.json(), {"detail": "Session not found."})
         repository.get_session.assert_called_once_with("missing-session")
         repository.update_session.assert_not_called()
+
+    def test_list_phrase_cards_returns_frontend_ready_shape(self) -> None:
+        repository = Mock()
+        repository.get_session.return_value = {"session_id": "session-123"}
+        phrase_card_service = Mock()
+        phrase_card_service.list_for_session.return_value = [
+            {
+                "card_id": "card-1",
+                "source_text": "I like keeping things relaxed instead of too formal.",
+                "english_expression": "I like keeping things relaxed instead of too formal.",
+                "tone_tag": "casual",
+                "usage_note": "Use this to describe your style in a natural way.",
+                "created_at": "2026-03-13T10:10:00+00:00",
+            }
+        ]
+        app = create_app()
+        app.dependency_overrides[get_session_repository] = lambda: repository
+        app.dependency_overrides[get_phrase_card_service] = lambda: phrase_card_service
+        client = TestClient(app)
+
+        response = client.get("/sessions/session-123/cards")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "session_id": "session-123",
+                "card_count": 1,
+                "cards": [
+                    {
+                        "card_id": "card-1",
+                        "source_text": "I like keeping things relaxed instead of too formal.",
+                        "english_expression": "I like keeping things relaxed instead of too formal.",
+                        "tone_tag": "casual",
+                        "usage_note": "Use this to describe your style in a natural way.",
+                        "created_at": "2026-03-13T10:10:00+00:00",
+                    }
+                ],
+            },
+        )
+        repository.get_session.assert_called_once_with("session-123")
+        phrase_card_service.list_for_session.assert_called_once_with("session-123")
+
+    def test_list_phrase_cards_returns_not_found_for_missing_session(self) -> None:
+        repository = Mock()
+        repository.get_session.return_value = None
+        phrase_card_service = Mock()
+        app = create_app()
+        app.dependency_overrides[get_session_repository] = lambda: repository
+        app.dependency_overrides[get_phrase_card_service] = lambda: phrase_card_service
+        client = TestClient(app)
+
+        response = client.get("/sessions/missing-session/cards")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {"detail": "Session not found."})
+        repository.get_session.assert_called_once_with("missing-session")
+        phrase_card_service.list_for_session.assert_not_called()
 
     def test_ingest_transcript_rejects_invalid_entry_fields(self) -> None:
         repository = Mock()

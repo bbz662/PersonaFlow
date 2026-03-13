@@ -157,3 +157,43 @@ class FirestoreScaffoldTests(unittest.TestCase):
                 "completed_at": "2026-03-13T10:10:00+00:00",
             }
         )
+
+    def test_add_phrase_card_persists_document_in_subcollection(self) -> None:
+        card_ref = Mock()
+        phrase_cards_collection_ref = Mock()
+        phrase_cards_collection_ref.document.return_value = card_ref
+        session_ref = Mock()
+        session_ref.collection.return_value = phrase_cards_collection_ref
+        collection_ref = Mock()
+        collection_ref.document.return_value = session_ref
+        client = Mock()
+        client.collection.return_value = collection_ref
+        repository = SessionRepository(client=client)
+
+        repository.add_phrase_card(
+            "session-123",
+            "card-789",
+            {
+                "card_id": "card-789",
+                "source_text": "I always overthink this stuff",
+                "english_expression": "I always overthink this stuff.",
+                "tone_tag": "reflective",
+                "usage_note": "Use this when you want to sound honest and casual.",
+                "created_at": "2026-03-13T10:11:00+00:00",
+            },
+        )
+
+        client.collection.assert_called_once_with("sessions")
+        collection_ref.document.assert_called_once_with("session-123")
+        session_ref.collection.assert_called_once_with("phrase_cards")
+        phrase_cards_collection_ref.document.assert_called_once_with("card-789")
+        card_ref.set.assert_called_once_with(
+            {
+                "card_id": "card-789",
+                "source_text": "I always overthink this stuff",
+                "english_expression": "I always overthink this stuff.",
+                "tone_tag": "reflective",
+                "usage_note": "Use this when you want to sound honest and casual.",
+                "created_at": "2026-03-13T10:11:00+00:00",
+            }
+        )

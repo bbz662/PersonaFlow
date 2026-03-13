@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.repositories.sessions import SessionRepository
+from app.services.phrase_cards import PhraseCardService
 
 
 class StartSessionRequest(BaseModel):
@@ -67,6 +68,22 @@ class CompleteSessionResponse(BaseModel):
     ended_at: str
     processing_started_at: str
     completed_at: str
+    card_count: int
+
+
+class PhraseCardResponse(BaseModel):
+    card_id: str
+    source_text: str
+    english_expression: str
+    tone_tag: str
+    usage_note: str
+    created_at: str
+
+
+class SessionPhraseCardsResponse(BaseModel):
+    session_id: str
+    card_count: int
+    cards: list[PhraseCardResponse]
 
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -74,6 +91,12 @@ router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 def get_session_repository() -> SessionRepository:
     return SessionRepository()
+
+
+def get_phrase_card_service(
+    repository: SessionRepository = Depends(get_session_repository),
+) -> PhraseCardService:
+    return PhraseCardService(repository=repository)
 
 
 @router.post("/start", response_model=StartSessionResponse, status_code=status.HTTP_201_CREATED)
@@ -147,6 +170,7 @@ def ingest_transcript(
 def complete_session(
     session_id: str,
     repository: SessionRepository = Depends(get_session_repository),
+    phrase_card_service: PhraseCardService = Depends(get_phrase_card_service),
 ) -> CompleteSessionResponse:
     if repository.get_session(session_id) is None:
         raise HTTPException(
@@ -166,11 +190,21 @@ def complete_session(
             "processing_started_at": processing_started_at,
         },
     )
+
+    try:
+        phrase_cards = phrase_card_service.generate_for_session(session_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
     repository.update_session(
         session_id,
         {
             "status": "completed",
             "completed_at": completed_at,
+            "card_count": len(phrase_cards),
         },
     )
 
@@ -180,4 +214,33 @@ def complete_session(
         ended_at=ended_at,
         processing_started_at=processing_started_at,
         completed_at=completed_at,
+        card_count=len(phrase_cards),
+    )
+
+
+@router.get(
+    "/{session_id}/cards",
+    response_model=SessionPhraseCardsResponse,
+    status_code=status.HTTP_200_OK,
+)
+def list_phrase_cards(
+    session_id: str,
+    repository: SessionRepository = Depends(get_session_repository),
+    phrase_card_service: PhraseCardService = Depends(get_phrase_card_service),
+) -> SessionPhraseCardsResponse:
+    if repository.get_session(session_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found.",
+        )
+
+    cards = [
+        PhraseCardResponse.model_validate(card)
+        for card in phrase_card_service.list_for_session(session_id)
+    ]
+
+    return SessionPhraseCardsResponse(
+        session_id=session_id,
+        card_count=len(cards),
+        cards=cards,
     )

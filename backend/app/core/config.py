@@ -11,6 +11,8 @@ class Settings:
     port: int
     google_cloud_project: str | None
     firestore_database_id: str
+    gemini_api_key: str | None
+    gemini_model: str
 
     @property
     def is_development(self) -> bool:
@@ -28,4 +30,6 @@ def get_settings() -> Settings:
         port=int(port),
         google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT") or None,
         firestore_database_id=os.getenv("FIRESTORE_DATABASE_ID") or "(default)",
+        gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
     )
