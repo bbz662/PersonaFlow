@@ -47,10 +47,28 @@ select {
   padding: 32px 20px;
 }
 
+.session-shell {
+  min-height: 100vh;
+  padding: 32px 20px;
+}
+
 .hero-card {
   width: min(980px, 100%);
   display: grid;
   grid-template-columns: 1.3fr 0.9fr;
+  gap: 24px;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+}
+
+.live-session-card {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  display: grid;
   gap: 24px;
   padding: 28px;
   border: 1px solid var(--border);
@@ -85,6 +103,13 @@ h1 {
   letter-spacing: -0.05em;
 }
 
+.session-title {
+  margin: 0;
+  font-size: clamp(2.4rem, 7vw, 4.4rem);
+  line-height: 0.98;
+  letter-spacing: -0.05em;
+}
+
 .lede {
   max-width: 34rem;
   margin: 20px 0 0;
@@ -113,6 +138,49 @@ h1 {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.live-session-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.session-status-block {
+  min-width: min(260px, 100%);
+  padding: 18px;
+  border-radius: 18px;
+  background: var(--surface-strong);
+  border: 1px solid rgba(92, 73, 44, 0.1);
+}
+
+.session-status-label,
+.panel-label,
+.transcript-speaker {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.session-status-value,
+.mic-status-title {
+  margin: 10px 0 0;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.session-meta,
+.mic-status-copy,
+.transcript-subtitle,
+.transcript-session-id {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .feature-list {
@@ -162,49 +230,113 @@ h1 {
   font-size: 0.92rem;
 }
 
-.session-state {
+.session-panels {
   display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.2fr);
+}
+
+.session-panel {
+  padding: 22px;
+  border-radius: 22px;
+  background: var(--surface-strong);
+  border: 1px solid rgba(92, 73, 44, 0.1);
+}
+
+.mic-status {
+  margin-top: 18px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.mic-indicator {
+  width: 12px;
+  height: 12px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--brand);
+  box-shadow: 0 0 0 8px rgba(182, 92, 46, 0.12);
+}
+
+.transcript-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.transcript-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.transcript-feed {
+  min-height: 320px;
+  display: grid;
+  align-content: start;
   gap: 14px;
   padding: 18px;
   border-radius: 18px;
-  background: var(--success-bg);
+  background: rgba(247, 244, 236, 0.7);
+  border: 1px solid rgba(92, 73, 44, 0.1);
 }
 
-.session-label {
-  margin: 0;
-  color: var(--success-text);
-  font-size: 1.05rem;
-  font-weight: 700;
-}
-
-.session-details {
-  margin: 0;
+.transcript-entry {
   display: grid;
-  gap: 12px;
+  gap: 6px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(92, 73, 44, 0.1);
 }
 
-.session-details div {
-  display: grid;
-  gap: 4px;
+.transcript-entry:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
-.session-details dt {
-  color: var(--muted);
-  font-size: 0.84rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.session-details dd {
+.transcript-text {
   margin: 0;
+  font-size: 1rem;
+  line-height: 1.7;
   color: var(--text);
-  font-size: 0.98rem;
-  word-break: break-word;
+}
+
+.session-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.end-session-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 160px;
+  padding: 14px 20px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid rgba(92, 73, 44, 0.18);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 700;
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease;
+}
+
+.end-session-button:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 250, 240, 0.9);
+  border-color: rgba(92, 73, 44, 0.28);
 }
 
 @media (max-width: 760px) {
   .hero-card {
     grid-template-columns: 1fr;
+    padding: 20px;
+  }
+
+  .live-session-card {
     padding: 20px;
   }
 
@@ -214,6 +346,21 @@ h1 {
 
   .hero-panel {
     padding: 20px;
+  }
+
+  .live-session-header,
+  .transcript-header,
+  .session-panels {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .session-actions {
+    justify-content: stretch;
+  }
+
+  .end-session-button {
+    width: 100%;
   }
 
   .lede {
