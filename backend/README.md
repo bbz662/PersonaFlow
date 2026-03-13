@@ -20,6 +20,27 @@ uvicorn app.main:app --reload
 
 The API will start on `http://127.0.0.1:8000` by default.
 
+## Docker
+
+Build locally:
+
+```bash
+cd backend
+docker build -t personaflow-backend .
+```
+
+Run locally:
+
+```bash
+docker run --rm -p 8000:8080 \
+  -e PORT=8080 \
+  personaflow-backend
+```
+
+The container listens on `0.0.0.0:$PORT`, which matches Cloud Run expectations.
+Set any required runtime environment variables with additional `-e` flags when validating
+Firestore or Gemini-backed flows.
+
 ## Environment variables
 
 Firestore is initialized lazily. The API can boot without Firestore credentials for
@@ -122,3 +143,4 @@ Storage constraints:
 
 - Gemini-backed English re-expression is attempted when `GEMINI_API_KEY` is configured; otherwise a local fallback keeps generation deterministic for development and tests.
 - This scaffold does not include authentication.
+- The Docker image is intended for local validation and later manual pushes to Artifact Registry for Cloud Run deployment.
