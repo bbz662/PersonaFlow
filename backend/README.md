@@ -37,6 +37,8 @@ FIRESTORE_DATABASE_ID=(default)
 ## Available routes
 
 - `GET /healthz`
+- `POST /sessions/start`
+- `POST /sessions/{session_id}/transcript`
 
 ## Firestore scaffold
 
@@ -52,7 +54,31 @@ Current scope:
 
 - Firestore client setup is centralized in `app/core/firestore.py`
 - `SessionRepository` exposes document and collection references for sessions
-- transcript entry and phrase card persistence are placeholder methods only
+- transcript entries can be written directly to Firestore under the session subcollection
+- phrase card persistence remains a placeholder for a later issue
+
+Transcript ingestion request shape:
+
+```json
+{
+  "entries": [
+    {
+      "entry_id": "optional-client-generated-id",
+      "speaker": "user",
+      "text": "I really enjoyed today",
+      "language": "ja",
+      "timestamp": "2026-03-13T10:00:00Z",
+      "turn_index": 0
+    }
+  ]
+}
+```
+
+Notes:
+
+- `entries` must include at least one transcript entry
+- `speaker` currently supports `user` and `agent`
+- `entry_id` is optional; the backend generates one when omitted
 
 Storage constraints:
 
@@ -61,5 +87,4 @@ Storage constraints:
 
 ## Notes
 
-- `app/api/routes/sessions.py` is intentionally a placeholder router for upcoming session endpoints.
 - This scaffold does not include session CRUD business logic, Gemini integration, or authentication.

@@ -45,9 +45,7 @@ class SessionRepository:
     def add_transcript_entry(
         self, session_id: str, entry_id: str, payload: dict[str, object]
     ) -> None:
-        raise NotImplementedError(
-            "Transcript entry persistence will be implemented in a future session issue."
-        )
+        self.list_transcript_entries_ref(session_id).document(entry_id).set(payload)
 
     def add_phrase_card(
         self, session_id: str, card_id: str, payload: dict[str, object]

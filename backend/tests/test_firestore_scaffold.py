@@ -76,3 +76,43 @@ class FirestoreScaffoldTests(unittest.TestCase):
                 "started_at": "2026-03-13T10:00:00+00:00",
             }
         )
+
+    def test_add_transcript_entry_persists_document_in_subcollection(self) -> None:
+        entry_ref = Mock()
+        transcript_collection_ref = Mock()
+        transcript_collection_ref.document.return_value = entry_ref
+        session_ref = Mock()
+        session_ref.collection.return_value = transcript_collection_ref
+        collection_ref = Mock()
+        collection_ref.document.return_value = session_ref
+        client = Mock()
+        client.collection.return_value = collection_ref
+        repository = SessionRepository(client=client)
+
+        repository.add_transcript_entry(
+            "session-123",
+            "entry-456",
+            {
+                "entry_id": "entry-456",
+                "speaker": "user",
+                "text": "Hello",
+                "language": "ja",
+                "timestamp": "2026-03-13T10:05:00+00:00",
+                "turn_index": 0,
+            },
+        )
+
+        client.collection.assert_called_once_with("sessions")
+        collection_ref.document.assert_called_once_with("session-123")
+        session_ref.collection.assert_called_once_with("transcript_entries")
+        transcript_collection_ref.document.assert_called_once_with("entry-456")
+        entry_ref.set.assert_called_once_with(
+            {
+                "entry_id": "entry-456",
+                "speaker": "user",
+                "text": "Hello",
+                "language": "ja",
+                "timestamp": "2026-03-13T10:05:00+00:00",
+                "turn_index": 0,
+            }
+        )

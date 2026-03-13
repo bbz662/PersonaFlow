@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 try:
     from fastapi.testclient import TestClient
@@ -61,3 +61,99 @@ class SessionApiTests(unittest.TestCase):
                 "started_at": payload["started_at"],
             },
         )
+
+    def test_ingest_transcript_stores_multiple_entries(self) -> None:
+        repository = Mock()
+        app = create_app()
+        app.dependency_overrides[get_session_repository] = lambda: repository
+        client = TestClient(app)
+
+        response = client.post(
+            "/sessions/session-123/transcript",
+            json={
+                "entries": [
+                    {
+                        "entry_id": "entry-1",
+                        "speaker": "user",
+                        "text": "I had fun today",
+                        "language": "ja",
+                        "timestamp": "2026-03-13T10:00:00Z",
+                        "turn_index": 0,
+                    },
+                    {
+                        "speaker": "agent",
+                        "text": "That sounds fun.",
+                        "language": "en",
+                        "timestamp": "2026-03-13T10:00:05Z",
+                        "turn_index": 1,
+                    },
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["session_id"], "session-123")
+        self.assertEqual(payload["stored_count"], 2)
+        self.assertEqual(payload["entries"][0]["entry_id"], "entry-1")
+        self.assertTrue(payload["entries"][1]["entry_id"])
+        repository.add_transcript_entry.assert_any_call(
+            "session-123",
+            "entry-1",
+            {
+                "entry_id": "entry-1",
+                "speaker": "user",
+                "text": "I had fun today",
+                "language": "ja",
+                "timestamp": "2026-03-13T10:00:00+00:00",
+                "turn_index": 0,
+            },
+        )
+        repository.add_transcript_entry.assert_any_call(
+            "session-123",
+            ANY,
+            {
+                "entry_id": ANY,
+                "speaker": "agent",
+                "text": "That sounds fun.",
+                "language": "en",
+                "timestamp": "2026-03-13T10:00:05+00:00",
+                "turn_index": 1,
+            },
+        )
+        self.assertEqual(repository.add_transcript_entry.call_count, 2)
+
+    def test_ingest_transcript_rejects_missing_entries(self) -> None:
+        repository = Mock()
+        app = create_app()
+        app.dependency_overrides[get_session_repository] = lambda: repository
+        client = TestClient(app)
+
+        response = client.post("/sessions/session-123/transcript", json={"entries": []})
+
+        self.assertEqual(response.status_code, 422)
+        repository.add_transcript_entry.assert_not_called()
+
+    def test_ingest_transcript_rejects_invalid_entry_fields(self) -> None:
+        repository = Mock()
+        app = create_app()
+        app.dependency_overrides[get_session_repository] = lambda: repository
+        client = TestClient(app)
+
+        response = client.post(
+            "/sessions/session-123/transcript",
+            json={
+                "entries": [
+                    {
+                        "speaker": "system",
+                        "text": "   ",
+                        "language": "",
+                        "timestamp": "not-a-timestamp",
+                        "turn_index": -1,
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        repository.add_transcript_entry.assert_not_called()
