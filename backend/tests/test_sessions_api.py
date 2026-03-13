@@ -134,6 +134,54 @@ class SessionApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         repository.add_transcript_entry.assert_not_called()
 
+    def test_complete_session_marks_processing_then_completed(self) -> None:
+        repository = Mock()
+        repository.get_session.return_value = {"session_id": "session-123"}
+        app = create_app()
+        app.dependency_overrides[get_session_repository] = lambda: repository
+        client = TestClient(app)
+
+        response = client.post("/sessions/session-123/complete")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["session_id"], "session-123")
+        self.assertEqual(payload["status"], "completed")
+        self.assertTrue(payload["ended_at"])
+        self.assertTrue(payload["processing_started_at"])
+        self.assertTrue(payload["completed_at"])
+        repository.get_session.assert_called_once_with("session-123")
+        repository.update_session.assert_any_call(
+            "session-123",
+            {
+                "status": "processing",
+                "ended_at": payload["ended_at"],
+                "processing_started_at": payload["processing_started_at"],
+            },
+        )
+        repository.update_session.assert_any_call(
+            "session-123",
+            {
+                "status": "completed",
+                "completed_at": payload["completed_at"],
+            },
+        )
+        self.assertEqual(repository.update_session.call_count, 2)
+
+    def test_complete_session_returns_not_found_for_missing_session(self) -> None:
+        repository = Mock()
+        repository.get_session.return_value = None
+        app = create_app()
+        app.dependency_overrides[get_session_repository] = lambda: repository
+        client = TestClient(app)
+
+        response = client.post("/sessions/missing-session/complete")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json(), {"detail": "Session not found."})
+        repository.get_session.assert_called_once_with("missing-session")
+        repository.update_session.assert_not_called()
+
     def test_ingest_transcript_rejects_invalid_entry_fields(self) -> None:
         repository = Mock()
         app = create_app()

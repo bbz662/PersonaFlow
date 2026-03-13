@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Body, Depends, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.repositories.sessions import SessionRepository
@@ -59,6 +59,14 @@ class TranscriptIngestionResponse(BaseModel):
     session_id: str
     stored_count: int
     entries: list[TranscriptEntryResponse]
+
+
+class CompleteSessionResponse(BaseModel):
+    session_id: str
+    status: str
+    ended_at: str
+    processing_started_at: str
+    completed_at: str
 
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
@@ -128,4 +136,48 @@ def ingest_transcript(
         session_id=session_id,
         stored_count=len(stored_entries),
         entries=stored_entries,
+    )
+
+
+@router.post(
+    "/{session_id}/complete",
+    response_model=CompleteSessionResponse,
+    status_code=status.HTTP_200_OK,
+)
+def complete_session(
+    session_id: str,
+    repository: SessionRepository = Depends(get_session_repository),
+) -> CompleteSessionResponse:
+    if repository.get_session(session_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found.",
+        )
+
+    ended_at = datetime.now(timezone.utc).isoformat()
+    processing_started_at = ended_at
+    completed_at = datetime.now(timezone.utc).isoformat()
+
+    repository.update_session(
+        session_id,
+        {
+            "status": "processing",
+            "ended_at": ended_at,
+            "processing_started_at": processing_started_at,
+        },
+    )
+    repository.update_session(
+        session_id,
+        {
+            "status": "completed",
+            "completed_at": completed_at,
+        },
+    )
+
+    return CompleteSessionResponse(
+        session_id=session_id,
+        status="completed",
+        ended_at=ended_at,
+        processing_started_at=processing_started_at,
+        completed_at=completed_at,
     )

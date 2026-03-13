@@ -116,3 +116,44 @@ class FirestoreScaffoldTests(unittest.TestCase):
                 "turn_index": 0,
             }
         )
+
+    def test_get_session_returns_none_when_document_missing(self) -> None:
+        session_ref = Mock()
+        session_ref.get.return_value.exists = False
+        collection_ref = Mock()
+        collection_ref.document.return_value = session_ref
+        client = Mock()
+        client.collection.return_value = collection_ref
+        repository = SessionRepository(client=client)
+
+        payload = repository.get_session("session-123")
+
+        self.assertIsNone(payload)
+        client.collection.assert_called_once_with("sessions")
+        collection_ref.document.assert_called_once_with("session-123")
+        session_ref.get.assert_called_once_with()
+
+    def test_update_session_updates_existing_document(self) -> None:
+        session_ref = Mock()
+        collection_ref = Mock()
+        collection_ref.document.return_value = session_ref
+        client = Mock()
+        client.collection.return_value = collection_ref
+        repository = SessionRepository(client=client)
+
+        repository.update_session(
+            "session-123",
+            {
+                "status": "completed",
+                "completed_at": "2026-03-13T10:10:00+00:00",
+            },
+        )
+
+        client.collection.assert_called_once_with("sessions")
+        collection_ref.document.assert_called_once_with("session-123")
+        session_ref.update.assert_called_once_with(
+            {
+                "status": "completed",
+                "completed_at": "2026-03-13T10:10:00+00:00",
+            }
+        )

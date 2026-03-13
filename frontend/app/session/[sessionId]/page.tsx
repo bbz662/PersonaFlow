@@ -16,6 +16,16 @@ type EventFeedEntry = {
   text: string;
 };
 
+type SessionCompletionResponse = {
+  session_id: string;
+  status: "completed";
+  ended_at: string;
+  processing_started_at: string;
+  completed_at: string;
+};
+
+type SessionViewState = "live" | "processing" | "completed";
+
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -44,6 +54,10 @@ export default function LiveSessionPage() {
   const transportRef = useRef<LiveSessionTransport | null>(null);
   const [connectionState, setConnectionState] = useState<ConnectionState>("ended");
   const [eventFeed, setEventFeed] = useState<EventFeedEntry[]>([]);
+  const [viewState, setViewState] = useState<SessionViewState>("live");
+  const [completionError, setCompletionError] = useState<string | null>(null);
+  const [completionPayload, setCompletionPayload] =
+    useState<SessionCompletionResponse | null>(null);
 
   const sessionId = params.sessionId;
   const startedAt = searchParams.get("startedAt");
@@ -54,6 +68,7 @@ export default function LiveSessionPage() {
   const canStart = connectionState === "ended" || connectionState === "failed";
   const canStop =
     connectionState === "connecting" || connectionState === "connected";
+  const isEnding = viewState === "processing";
 
   const statusDescription = useMemo(() => {
     return statusCopy[connectionState];
@@ -99,6 +114,81 @@ export default function LiveSessionPage() {
 
   function handleStopConnection() {
     transportRef.current?.disconnect();
+  }
+
+  async function handleEndSession() {
+    if (isEnding || viewState === "completed") {
+      return;
+    }
+
+    setCompletionError(null);
+    setViewState("processing");
+    transportRef.current?.disconnect();
+    transportRef.current = null;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/complete`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to end the session right now.");
+      }
+
+      const payload = (await response.json()) as SessionCompletionResponse;
+      setCompletionPayload(payload);
+      setViewState("completed");
+    } catch (error) {
+      setViewState("live");
+      setCompletionError(
+        error instanceof Error
+          ? error.message
+          : "Unable to end the session right now.",
+      );
+    }
+  }
+
+  if (viewState !== "live") {
+    return (
+      <main className="session-shell">
+        <section className="live-session-card processing-card">
+          <p className="eyebrow">Post-session</p>
+          <h1 className="session-title">
+            {viewState === "processing"
+              ? "Wrapping up your session."
+              : "Session processing finished."}
+          </h1>
+          <p className="lede processing-copy">
+            {viewState === "processing"
+              ? "Ending the live session and triggering minimal post-session processing."
+              : "The live session has ended and the backend marked this session as completed."}
+          </p>
+          {completionPayload ? (
+            <div className="processing-details" aria-live="polite">
+              <p className="session-status-label">Session status</p>
+              <p className="session-status-value">Completed</p>
+              <p className="session-meta">
+                Ended {new Date(completionPayload.ended_at).toLocaleString()}
+              </p>
+              <p className="session-meta">
+                Completed {new Date(completionPayload.completed_at).toLocaleString()}
+              </p>
+            </div>
+          ) : null}
+          <div className="session-actions session-actions-start">
+            {viewState === "processing" ? (
+              <button className="start-button" type="button" disabled>
+                Processing...
+              </button>
+            ) : (
+              <Link className="start-button processing-link" href="/">
+                Back to home
+              </Link>
+            )}
+          </div>
+        </section>
+      </main>
+    );
   }
 
   return (
@@ -186,9 +276,15 @@ export default function LiveSessionPage() {
         </section>
 
         <div className="session-actions">
-          <Link className="end-session-button" href="/">
-            Leave Session
-          </Link>
+          {completionError ? <p className="error-note">{completionError}</p> : null}
+          <button
+            className="end-session-button"
+            type="button"
+            onClick={handleEndSession}
+            disabled={isEnding}
+          >
+            End Session
+          </button>
         </div>
       </section>
     </main>
