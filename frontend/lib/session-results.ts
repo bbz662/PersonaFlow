@@ -1,54 +1,89 @@
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
+export type SessionMetadata = {
+  session_id: string;
+  status: string;
+  source_language: string | null;
+  target_language: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  processing_started_at: string | null;
+  completed_at: string | null;
+  card_count: number;
+  session_summary: string | null;
+};
+
 export type PhraseCard = {
   id: string;
   source_text: string;
   english_expression: string;
   tone_tag: string;
   usage_note: string;
+  created_at: string;
+};
+
+type PhraseCardResponse = {
+  card_id: string;
+  source_text: string;
+  english_expression: string;
+  tone_tag: string;
+  usage_note: string;
+  created_at: string;
+};
+
+type PhraseCardsResponse = {
+  session_id: string;
+  card_count: number;
+  cards: PhraseCardResponse[];
 };
 
 export type SessionResults = {
-  sessionId: string;
-  reviewedMoments: number;
-  summaryPlaceholder: string;
+  session: SessionMetadata;
   cards: PhraseCard[];
 };
 
-const MOCK_RESULTS: SessionResults = {
-  sessionId: "demo-session",
-  reviewedMoments: 3,
-  summaryPlaceholder:
-    "Session summary will appear here after backend wiring. For now, this space shows where PersonaFlow can briefly reflect the learner's speaking style, recurring themes, and a few reusable moments worth reviewing.",
-  cards: [
-    {
-      id: "card-1",
-      source_text: "なんか今日はちょっと落ち着いて話したい気分だった。",
-      english_expression: "I was in the mood for a calmer kind of conversation today.",
-      tone_tag: "calm and reflective",
-      usage_note:
-        "Useful when you want to set a softer tone without sounding stiff or formal.",
-    },
-    {
-      id: "card-2",
-      source_text: "それ、嫌いじゃないけど毎日はきついかも。",
-      english_expression: "I don't mind that, but it might be a bit much for me every day.",
-      tone_tag: "gentle boundary",
-      usage_note:
-        "A natural way to push back lightly while still sounding open and personable.",
-    },
-    {
-      id: "card-3",
-      source_text: "ちゃんと自分の言葉で伝えたい感じがある。",
-      english_expression: "I want to put that into my own words properly.",
-      tone_tag: "personal and intentional",
-      usage_note:
-        "Good for moments when you want to sound thoughtful and clearly personal, not generic.",
-    },
-  ],
-};
+async function readJson<T>(response: Response): Promise<T> {
+  if (response.ok) {
+    return (await response.json()) as T;
+  }
 
-export function getSessionResults(sessionId: string): SessionResults {
+  let detail = "Unable to load session results right now.";
+
+  try {
+    const payload = (await response.json()) as { detail?: string };
+    if (payload.detail) {
+      detail = payload.detail;
+    }
+  } catch {
+    // Keep the fallback message when the response body is empty or invalid.
+  }
+
+  throw new Error(detail);
+}
+
+export async function fetchSessionResults(sessionId: string): Promise<SessionResults> {
+  const [session, cardsPayload] = await Promise.all([
+    fetch(`${API_BASE_URL}/sessions/${sessionId}`, { cache: "no-store" }).then((response) =>
+      readJson<SessionMetadata>(response),
+    ),
+    fetch(`${API_BASE_URL}/sessions/${sessionId}/cards`, { cache: "no-store" }).then(
+      (response) => readJson<PhraseCardsResponse>(response),
+    ),
+  ]);
+
   return {
-    ...MOCK_RESULTS,
-    sessionId,
+    session: {
+      ...session,
+      card_count: session.card_count || cardsPayload.card_count,
+      session_summary: session.session_summary?.trim() || null,
+    },
+    cards: cardsPayload.cards.map((card) => ({
+      id: card.card_id,
+      source_text: card.source_text,
+      english_expression: card.english_expression,
+      tone_tag: card.tone_tag,
+      usage_note: card.usage_note,
+      created_at: card.created_at,
+    })),
   };
 }

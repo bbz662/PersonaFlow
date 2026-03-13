@@ -4,12 +4,17 @@ from unittest.mock import ANY, Mock
 try:
     from fastapi.testclient import TestClient
 
-    from app.api.routes.sessions import get_phrase_card_service, get_session_repository
+    from app.api.routes.sessions import (
+        get_phrase_card_service,
+        get_session_repository,
+        get_session_summary_service,
+    )
     from app.main import create_app
 except ModuleNotFoundError:
     TestClient = None
     get_phrase_card_service = None
     get_session_repository = None
+    get_session_summary_service = None
     create_app = None
 
 
@@ -179,7 +184,7 @@ class SessionApiTests(unittest.TestCase):
         self.assertTrue(payload["processing_started_at"])
         self.assertTrue(payload["completed_at"])
         self.assertEqual(payload["card_count"], 3)
-        repository.get_session.assert_called_once_with("session-123")
+        repository.get_session.assert_any_call("session-123")
         repository.update_session.assert_any_call(
             "session-123",
             {
@@ -194,6 +199,7 @@ class SessionApiTests(unittest.TestCase):
                 "status": "completed",
                 "completed_at": payload["completed_at"],
                 "card_count": 3,
+                "session_summary": ANY,
             },
         )
         self.assertEqual(repository.update_session.call_count, 2)
@@ -212,6 +218,70 @@ class SessionApiTests(unittest.TestCase):
         self.assertEqual(response.json(), {"detail": "Session not found."})
         repository.get_session.assert_called_once_with("missing-session")
         repository.update_session.assert_not_called()
+
+    def test_get_session_metadata_returns_summary_and_fields(self) -> None:
+        repository = Mock()
+        repository.get_session.return_value = {
+            "session_id": "session-123",
+            "status": "completed",
+            "source_language": "ja",
+            "target_language": "en",
+            "started_at": "2026-03-13T10:00:00+00:00",
+            "ended_at": "2026-03-13T10:10:00+00:00",
+            "processing_started_at": "2026-03-13T10:10:00+00:00",
+            "completed_at": "2026-03-13T10:10:02+00:00",
+            "card_count": 3,
+            "session_summary": "A real summary from the completed session.",
+        }
+        session_summary_service = Mock()
+        app = create_app()
+        app.dependency_overrides[get_session_repository] = lambda: repository
+        app.dependency_overrides[get_session_summary_service] = lambda: session_summary_service
+        client = TestClient(app)
+
+        response = client.get("/sessions/session-123")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "session_id": "session-123",
+                "status": "completed",
+                "source_language": "ja",
+                "target_language": "en",
+                "started_at": "2026-03-13T10:00:00+00:00",
+                "ended_at": "2026-03-13T10:10:00+00:00",
+                "processing_started_at": "2026-03-13T10:10:00+00:00",
+                "completed_at": "2026-03-13T10:10:02+00:00",
+                "card_count": 3,
+                "session_summary": "A real summary from the completed session.",
+            },
+        )
+        repository.get_session.assert_any_call("session-123")
+        session_summary_service.generate_for_session.assert_not_called()
+
+    def test_get_session_metadata_generates_missing_summary_for_completed_session(self) -> None:
+        repository = Mock()
+        repository.get_session.return_value = {
+            "session_id": "session-123",
+            "status": "completed",
+            "card_count": 2,
+        }
+        session_summary_service = Mock()
+        session_summary_service.generate_for_session.return_value = "Generated summary"
+        app = create_app()
+        app.dependency_overrides[get_session_repository] = lambda: repository
+        app.dependency_overrides[get_session_summary_service] = lambda: session_summary_service
+        client = TestClient(app)
+
+        response = client.get("/sessions/session-123")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["session_summary"], "Generated summary")
+        session_summary_service.generate_for_session.assert_called_once_with("session-123")
+        repository.update_session.assert_called_once_with(
+            "session-123", {"session_summary": "Generated summary"}
+        )
 
     def test_list_phrase_cards_returns_frontend_ready_shape(self) -> None:
         repository = Mock()
@@ -252,7 +322,7 @@ class SessionApiTests(unittest.TestCase):
                 ],
             },
         )
-        repository.get_session.assert_called_once_with("session-123")
+        repository.get_session.assert_any_call("session-123")
         phrase_card_service.list_for_session.assert_called_once_with("session-123")
 
     def test_list_phrase_cards_returns_not_found_for_missing_session(self) -> None:
@@ -294,3 +364,4 @@ class SessionApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         repository.add_transcript_entry.assert_not_called()
+
