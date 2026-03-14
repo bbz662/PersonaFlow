@@ -72,3 +72,15 @@ variable "backend_gemini_model" {
   type        = string
   default     = "gemini-2.0-flash"
 }
+
+variable "backend_min_instance_count" {
+  description = "Minimum number of Cloud Run instances to keep warm for the backend service. Setting this to 0 allows all instances to scale down to zero when idle, which may increase cold start times."
+  type        = number
+  default     = 0
+}
+
+variable "backend_max_instance_count" {
+  description = "Maximum number of Cloud Run instances for the backend service. Adjust this based on expected load during validation. Setting this to a low number can help control costs."
+  type        = number
+  default     = 1
+}

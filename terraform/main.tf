@@ -44,6 +44,11 @@ resource "google_cloud_run_v2_service" "backend" {
   ingress             = "INGRESS_TRAFFIC_ALL"
 
   template {
+    scaling {
+      min_instance_count = var.backend_min_instance_count
+      max_instance_count = var.backend_max_instance_count
+    }
+
     containers {
       image = local.backend_image
 
@@ -75,7 +80,14 @@ resource "google_cloud_run_v2_service" "backend" {
         name  = "GEMINI_MODEL"
         value = var.backend_gemini_model
       }
+
+      resources {
+        startup_cpu_boost = true
+        # cpu_idle = true
+      }
     }
+
+    timeout = "900s"
   }
 
   traffic {
