@@ -4,14 +4,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { apiBaseUrl, realtimeVoiceEnabled } from "../lib/runtime-config";
+
 type StartSessionResponse = {
   session_id: string;
   status: string;
   started_at: string;
 };
-
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 export default function HomePage() {
   const router = useRouter();
@@ -23,7 +22,7 @@ export default function HomePage() {
     setErrorMessage(null);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/sessions/start`, {
+      const response = await fetch(`${apiBaseUrl}/sessions/start`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -85,13 +84,28 @@ export default function HomePage() {
             >
               {isStarting ? "Starting..." : "Start Session"}
             </button>
-            <Link className="secondary-button hero-link-button" href="/realtime">
-              Open Realtime Demo
-            </Link>
+            {realtimeVoiceEnabled ? (
+              <Link className="secondary-button hero-link-button" href="/realtime">
+                Open Realtime Demo
+              </Link>
+            ) : (
+              <span
+                className="secondary-button hero-link-button"
+                aria-disabled="true"
+              >
+                Realtime Demo Disabled
+              </span>
+            )}
           </div>
           <p className="button-note">
             Starts an anonymous Japanese-to-English practice session.
           </p>
+          {!realtimeVoiceEnabled ? (
+            <p className="button-note">
+              Set <code>NEXT_PUBLIC_REALTIME_VOICE_ENABLED=true</code> to expose the
+              realtime voice path locally.
+            </p>
+          ) : null}
           {errorMessage ? <p className="error-note">{errorMessage}</p> : null}
         </div>
       </section>

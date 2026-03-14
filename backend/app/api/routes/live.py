@@ -1,11 +1,19 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.core.config import get_settings
+
 
 router = APIRouter(tags=["live"])
 
 
 @router.websocket("/sessions/{session_id}/live")
 async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
+    settings = get_settings()
+
+    if not settings.realtime_voice_enabled:
+        await websocket.close(code=1008, reason="Realtime voice is disabled.")
+        return
+
     await websocket.accept()
     await websocket.send_json(
         {
