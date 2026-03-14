@@ -144,6 +144,7 @@ Assumptions for that flow:
 - `POST /sessions/{session_id}/transcript`
 - `POST /sessions/{session_id}/complete`
 - `GET /sessions/{session_id}/cards`
+- `POST /voice-agent/tools/execute`
 
 ## Firestore scaffold
 
@@ -211,6 +212,58 @@ Phrase card response shape:
       "created_at": "2026-03-13T10:10:00+00:00"
     }
   ]
+}
+```
+
+Voice-agent tool execution request shape:
+
+```json
+{
+  "session_id": "session-123",
+  "tool_name": "generate_phrase_card_preview",
+  "arguments": {
+    "utterance_text": "I stayed in and made curry.",
+    "source_language": "ja",
+    "turn_index": 4
+  }
+}
+```
+
+Voice-agent tool execution response shape:
+
+```json
+{
+  "request_id": "req-123",
+  "session_id": "session-123",
+  "tool_name": "generate_phrase_card_preview",
+  "status": "completed",
+  "result": {
+    "summary": "Prepared 1 phrase card previews from the latest learner turn.",
+    "card_count": 1,
+    "cards": [
+      {
+        "card_id": "preview-1",
+        "source_text": "I stayed in and made curry.",
+        "english_expression": "I stayed in and made curry.",
+        "tone_tag": "warm",
+        "usage_note": "Use this for a casual personal recap.",
+        "created_at": "preview"
+      }
+    ]
+  }
+}
+```
+
+Voice-agent error response shape:
+
+```json
+{
+  "request_id": "req-123",
+  "error": {
+    "code": "session_not_found",
+    "message": "Session not found.",
+    "details": null
+  }
 }
 ```
 
