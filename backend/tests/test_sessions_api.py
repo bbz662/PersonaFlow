@@ -325,6 +325,58 @@ class SessionApiTests(unittest.TestCase):
         repository.get_session.assert_any_call("session-123")
         phrase_card_service.list_for_session.assert_called_once_with("session-123")
 
+    def test_preview_phrase_cards_returns_tool_ready_shape(self) -> None:
+        repository = Mock()
+        repository.get_session.return_value = {"session_id": "session-123"}
+        phrase_card_service = Mock()
+        phrase_card_service.preview_for_text.return_value = [
+            {
+                "source_text": "I stayed in and made curry.",
+                "english_expression": "I stayed in and made curry.",
+                "tone_tag": "warm",
+                "usage_note": "Use this for a casual personal recap.",
+            }
+        ]
+        app = create_app()
+        app.dependency_overrides[get_session_repository] = lambda: repository
+        app.dependency_overrides[get_phrase_card_service] = lambda: phrase_card_service
+        client = TestClient(app)
+
+        response = client.post(
+            "/sessions/session-123/tools/phrase-card-preview",
+            json={
+                "utterance_text": "I stayed in and made curry.",
+                "source_language": "ja",
+                "turn_index": 4,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "tool_name": "generate_phrase_card_preview",
+                "summary": "Prepared 1 phrase card previews from the latest learner turn.",
+                "card_count": 1,
+                "cards": [
+                    {
+                        "card_id": "preview-1",
+                        "source_text": "I stayed in and made curry.",
+                        "english_expression": "I stayed in and made curry.",
+                        "tone_tag": "warm",
+                        "usage_note": "Use this for a casual personal recap.",
+                        "created_at": "preview",
+                    }
+                ],
+            },
+        )
+        phrase_card_service.preview_for_text.assert_called_once_with(
+            text="I stayed in and made curry.",
+            source_language="ja",
+            turn_index=4,
+        )
+        repository.get_session.assert_any_call("session-123")
+
     def test_list_phrase_cards_returns_not_found_for_missing_session(self) -> None:
         repository = Mock()
         repository.get_session.return_value = None
@@ -364,4 +416,3 @@ class SessionApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         repository.add_transcript_entry.assert_not_called()
-

@@ -454,6 +454,31 @@ h1 {
   flex-wrap: wrap;
 }
 
+.utterance-composer,
+.tool-status-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.session-textarea {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(92, 73, 44, 0.14);
+  background: rgba(247, 244, 236, 0.72);
+  color: var(--text);
+  resize: vertical;
+}
+
+.tool-output {
+  margin: 0;
+  font: inherit;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
 .transcript-panel {
   display: grid;
   gap: 18px;
@@ -739,6 +764,14 @@ h1 {
   color: var(--success-text);
 }
 
+.voice-tool-failed,
+.voice-tool-timed,
+.voice-tool-timed_out {
+  background: rgba(163, 63, 42, 0.12);
+  color: var(--error);
+}
+
+.voice-tool-idle,
 .voice-tool-queued {
   background: rgba(92, 73, 44, 0.08);
   color: var(--muted);

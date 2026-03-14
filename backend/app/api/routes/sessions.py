@@ -100,6 +100,27 @@ class SessionPhraseCardsResponse(BaseModel):
     cards: list[PhraseCardResponse]
 
 
+class PhraseCardPreviewRequest(BaseModel):
+    utterance_text: str
+    source_language: str = Field(default="ja")
+    turn_index: int = Field(default=0, ge=0)
+
+    @field_validator("utterance_text", "source_language")
+    @classmethod
+    def validate_preview_fields(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be empty")
+        return stripped
+
+
+class PhraseCardPreviewResponse(BaseModel):
+    tool_name: Literal["generate_phrase_card_preview"]
+    summary: str
+    card_count: int
+    cards: list[PhraseCardResponse]
+
+
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
@@ -307,6 +328,55 @@ def list_phrase_cards(
 
     return SessionPhraseCardsResponse(
         session_id=session_id,
+        card_count=len(cards),
+        cards=cards,
+    )
+
+
+@router.post(
+    "/{session_id}/tools/phrase-card-preview",
+    response_model=PhraseCardPreviewResponse,
+    status_code=status.HTTP_200_OK,
+)
+def preview_phrase_cards(
+    session_id: str,
+    payload: PhraseCardPreviewRequest,
+    repository: SessionRepository = Depends(get_session_repository),
+    phrase_card_service: PhraseCardService = Depends(get_phrase_card_service),
+) -> PhraseCardPreviewResponse:
+    if repository.get_session(session_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found.",
+        )
+
+    try:
+        preview_cards = phrase_card_service.preview_for_text(
+            text=payload.utterance_text,
+            source_language=payload.source_language,
+            turn_index=payload.turn_index,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    cards = [
+        PhraseCardResponse(
+            card_id=f"preview-{index}",
+            source_text=card["source_text"],
+            english_expression=card["english_expression"],
+            tone_tag=card["tone_tag"],
+            usage_note=card["usage_note"],
+            created_at="preview",
+        )
+        for index, card in enumerate(preview_cards, start=1)
+    ]
+
+    return PhraseCardPreviewResponse(
+        tool_name="generate_phrase_card_preview",
+        summary=f"Prepared {len(cards)} phrase card previews from the latest learner turn.",
         card_count=len(cards),
         cards=cards,
     )
