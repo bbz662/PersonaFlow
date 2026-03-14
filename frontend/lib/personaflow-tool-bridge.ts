@@ -25,6 +25,36 @@ export type PhraseCardPreviewResult = {
   cards: PhraseCardPreviewCard[];
 };
 
+type VoiceAgentToolExecutionResponse = {
+  request_id: string;
+  session_id: string;
+  tool_name: typeof PHRASE_CARD_TOOL_NAME;
+  status: "completed";
+  result: {
+    summary: string;
+    card_count: number;
+    cards: PhraseCardPreviewCard[];
+  };
+};
+
+type VoiceAgentToolErrorResponse = {
+  request_id: string;
+  error?: {
+    code?: string;
+    message?: string;
+  };
+};
+
+class ToolBridgeRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+  ) {
+    super(message);
+    this.name = "ToolBridgeRequestError";
+  }
+}
+
 export type ToolBridgeContext = {
   sessionId: string;
   apiBaseUrl: string;
@@ -75,17 +105,23 @@ async function readJson<T>(response: Response): Promise<T> {
   }
 
   let message = "PersonaFlow could not complete the tool request.";
+  let code = "request_failed";
 
   try {
-    const payload = (await response.json()) as { detail?: string };
-    if (payload.detail) {
+    const payload = (await response.json()) as
+      | VoiceAgentToolErrorResponse
+      | { detail?: string };
+    if ("error" in payload && payload.error?.message) {
+      message = payload.error.message;
+      code = payload.error.code ?? code;
+    } else if ("detail" in payload && payload.detail) {
       message = payload.detail;
     }
   } catch {
     // Fall back to the default message when the error response is empty.
   }
 
-  throw new Error(message);
+  throw new ToolBridgeRequestError(message, code);
 }
 
 export class PersonaFlowToolBridge {
@@ -114,20 +150,34 @@ export class PersonaFlowToolBridge {
     const timeout = window.setTimeout(() => controller.abort(), TOOL_TIMEOUT_MS);
 
     try {
+      const requestId = crypto.randomUUID();
       const response = await fetch(
-        `${context.apiBaseUrl}/sessions/${context.sessionId}/tools/phrase-card-preview`,
+        `${context.apiBaseUrl}/voice-agent/tools/execute`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            "X-Request-ID": requestId,
           },
-          body: JSON.stringify(args),
+          body: JSON.stringify({
+            session_id: context.sessionId,
+            tool_name: PHRASE_CARD_TOOL_NAME,
+            arguments: args,
+          }),
           signal: controller.signal,
         },
       );
 
-      const result = await readJson<PhraseCardPreviewResult>(response);
-      return { status: "completed", result };
+      const payload = await readJson<VoiceAgentToolExecutionResponse>(response);
+      return {
+        status: "completed",
+        result: {
+          tool_name: payload.tool_name,
+          summary: payload.result.summary,
+          card_count: payload.result.card_count,
+          cards: payload.result.cards,
+        },
+      };
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         return {
@@ -139,7 +189,13 @@ export class PersonaFlowToolBridge {
 
       return {
         status: "failed",
-        code: "request_failed",
+        code:
+          error instanceof ToolBridgeRequestError &&
+          (error.code === "invalid_request" || error.code === "tool_execution_failed")
+            ? "bad_arguments"
+            : error instanceof ToolBridgeRequestError && error.code === "unsupported_tool"
+              ? "unsupported_tool"
+              : "request_failed",
         message:
           error instanceof Error
             ? error.message
