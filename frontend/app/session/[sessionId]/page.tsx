@@ -37,6 +37,8 @@ import {
 type EventFeedEntry = {
   id: string;
   speaker: string;
+  kind: "user" | "assistant" | "tool_call" | "tool_result" | "system" | "error";
+  label: string;
   text: string;
 };
 
@@ -77,13 +79,6 @@ const MAX_RECONNECT_ATTEMPTS = 2;
 const RECONNECT_DELAY_MS = 1_200;
 const DEBUG_EVENT_LIMIT = 40;
 
-const statusCopy: Record<RealtimeConnectionState, string> = {
-  connecting: "Opening the Gemini Live session.",
-  connected: "Gemini Live is active and ready for the next spoken turn.",
-  failed: "The Gemini Live session could not connect. Retry the demo session.",
-  ended: "The Gemini Live session is not active.",
-};
-
 const voiceStateCopy: Record<VoiceSessionState["status"], string> = {
   idle: "Ready to connect",
   connecting: "Connecting live session",
@@ -121,6 +116,8 @@ function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEn
       return {
         id: `connected-${index}`,
         speaker: "Session",
+        kind: "system",
+        label: "Live session",
         text: `Gemini Live connected for session ${event.sessionId}.`,
       };
 
@@ -133,6 +130,18 @@ function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEn
             : event.speaker === "user"
               ? "You"
               : "Session event",
+        kind:
+          event.speaker === "agent"
+            ? "assistant"
+            : event.speaker === "user"
+              ? "user"
+              : "system",
+        label:
+          event.speaker === "agent"
+            ? "Assistant reply"
+            : event.speaker === "user"
+              ? "Learner turn"
+              : "Session event",
         text: event.text,
       };
 
@@ -140,6 +149,8 @@ function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEn
       return {
         id: `audio-${index}`,
         speaker: "Audio",
+        kind: "system",
+        label: "Audio playback",
         text: `Assistant playback received ${event.chunk.samples.length} audio samples.`,
       };
 
@@ -147,6 +158,8 @@ function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEn
       return {
         id: `tool-${index}`,
         speaker: "Tool request",
+        kind: "tool_call",
+        label: "Tool invoked",
         text: `${event.name} requested by Gemini Live.`,
       };
 
@@ -154,6 +167,8 @@ function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEn
       return {
         id: `tool-result-${index}`,
         speaker: "Tool result",
+        kind: "tool_result",
+        label: "Tool result",
         text: `${event.name} returned structured data to the live session.`,
       };
 
@@ -161,6 +176,8 @@ function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEn
       return {
         id: `tool-error-${index}`,
         speaker: "Tool error",
+        kind: "error",
+        label: "Tool error",
         text: `${event.name} failed: ${event.message}`,
       };
 
@@ -168,6 +185,8 @@ function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEn
       return {
         id: `closed-${index}`,
         speaker: "Session",
+        kind: "system",
+        label: "Session closed",
         text:
           event.reason === "client"
             ? "Gemini Live session closed by the client."
@@ -179,6 +198,8 @@ function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEn
       return {
         id: `error-${index}`,
         speaker: "Error",
+        kind: "error",
+        label: event.type === "recoverable.error" ? "Recoverable error" : "Fatal error",
         text: event.message,
       };
   }
@@ -195,6 +216,140 @@ function isTurnActive(status: VoiceSessionState["status"]) {
     status === "tool_running" ||
     status === "speaking"
   );
+}
+
+function getStatusTone(
+  voiceState: VoiceSessionState,
+  connectionState: RealtimeConnectionState,
+): "active" | "warn" | "error" | "neutral" {
+  if (voiceState.status === "error" || connectionState === "failed") {
+    return "error";
+  }
+
+  if (
+    voiceState.status === "reconnecting" ||
+    voiceState.status === "interrupted" ||
+    voiceState.status === "disconnected" ||
+    connectionState === "connecting"
+  ) {
+    return "warn";
+  }
+
+  if (
+    voiceState.status === "listening" ||
+    voiceState.status === "thinking" ||
+    voiceState.status === "tool_running" ||
+    voiceState.status === "speaking" ||
+    connectionState === "connected"
+  ) {
+    return "active";
+  }
+
+  return "neutral";
+}
+
+function getNowCopy(voiceState: VoiceSessionState, connectionState: RealtimeConnectionState) {
+  if (voiceState.status === "reconnecting") {
+    return {
+      title: "Recovering the live demo",
+      body: `Reconnect attempt ${voiceState.attempt} of ${MAX_RECONNECT_ATTEMPTS}. ${voiceState.reason}`,
+    };
+  }
+
+  if (voiceState.status === "error") {
+    return {
+      title: voiceState.recoverable ? "The demo needs a retry" : "The live session stopped",
+      body: voiceState.message,
+    };
+  }
+
+  switch (voiceState.status) {
+    case "idle":
+      return {
+        title: "Ready to start the live demo",
+        body: "Open the live connection to show one spoken turn becoming a phrase-card preview.",
+      };
+    case "connecting":
+      return {
+        title: "Opening Gemini Live",
+        body: "PersonaFlow is establishing the live session before the learner turn begins.",
+      };
+    case "connected":
+      return {
+        title: "Waiting for the learner turn",
+        body: "The session is live and ready to capture the next spoken moment.",
+      };
+    case "listening":
+      return {
+        title: "Listening to the learner",
+        body: "PersonaFlow is capturing the spoken turn before preparing a phrase-card preview.",
+      };
+    case "thinking":
+      return {
+        title: "Interpreting the turn",
+        body: "The assistant is deciding how to turn this personal moment into a reusable English phrase.",
+      };
+    case "tool_running":
+      return {
+        title: "Generating phrase-card preview",
+        body: "The PersonaFlow tool is running now and the result will feed the assistant reply.",
+      };
+    case "speaking":
+      return {
+        title: "Responding with the result",
+        body: "The assistant is speaking back using the completed phrase-card preview.",
+      };
+    case "interrupted":
+      return {
+        title: "Turn interrupted",
+        body: "Playback was stopped. Retry the turn to continue the same demo story.",
+      };
+    case "disconnected":
+      return {
+        title: "Live connection closed",
+        body:
+          connectionState === "ended"
+            ? "The session is stopped. Start the connection again to rerun the demo."
+            : "Reconnect to return to a usable live-demo state.",
+      };
+  }
+}
+
+function getNextStepCopy(
+  voiceState: VoiceSessionState,
+  connectionState: RealtimeConnectionState,
+) {
+  if (voiceState.status === "error") {
+    return voiceState.recoverable
+      ? "Retry the connection to recover the demo state."
+      : "Start a fresh live connection before ending the session.";
+  }
+
+  if (voiceState.status === "reconnecting") {
+    return "Wait for the transport to reopen, then rerun the demo turn.";
+  }
+
+  if (connectionState === "ended" || connectionState === "failed" || voiceState.status === "idle") {
+    return "Start the live connection.";
+  }
+
+  if (voiceState.status === "connected") {
+    return "Let the learner speak or run the demo turn again.";
+  }
+
+  if (voiceState.status === "listening") {
+    return "Finish the spoken turn.";
+  }
+
+  if (voiceState.status === "thinking" || voiceState.status === "tool_running") {
+    return "Wait for the tool result.";
+  }
+
+  if (voiceState.status === "speaking") {
+    return "Let the assistant finish or interrupt and retry.";
+  }
+
+  return "Use retry if you want to rerun the same scenario.";
 }
 
 export default function LiveSessionPage() {
@@ -253,6 +408,17 @@ export default function LiveSessionPage() {
     ["connected", "listening", "thinking", "tool_running", "speaking", "interrupted"].includes(
       voiceState.status,
     );
+  const liveStatusTone = getStatusTone(voiceState, connectionState);
+  const nowCopy = getNowCopy(voiceState, connectionState);
+  const nextStepCopy = getNextStepCopy(voiceState, connectionState);
+  const latestUserEntry = [...eventFeed].reverse().find((entry) => entry.kind === "user");
+  const latestAssistantEntry = [...eventFeed].reverse().find((entry) => entry.kind === "assistant");
+  const toolHistoryEntries = eventFeed.filter(
+    (entry) => entry.kind === "tool_call" || entry.kind === "tool_result",
+  );
+  const visibleErrors = [sessionError, transcriptSaveError, completionError].filter(
+    (error): error is string => Boolean(error),
+  );
 
   useEffect(() => {
     voiceStateRef.current = voiceState;
@@ -338,6 +504,8 @@ export default function LiveSessionPage() {
       {
         id: `local-${current.length}-${crypto.randomUUID()}`,
         speaker,
+        kind: "system",
+        label: "Session event",
         text,
       },
     ]);
@@ -1006,15 +1174,18 @@ export default function LiveSessionPage() {
         <header className="live-session-header">
           <div>
             <p className="eyebrow">Live session</p>
-            <h1 className="session-title">One spoken phrase-card scenario.</h1>
+            <h1 className="session-title">Watch one spoken moment become a phrase-card preview.</h1>
+            <p className="lede">
+              The learner speaks naturally, PersonaFlow captures the moment, runs one visible tool,
+              and answers with a reusable English expression that keeps the learner&apos;s tone.
+            </p>
           </div>
           <div className="session-status-block" aria-live="polite">
-            <p className="session-status-label">Connection state</p>
-            <p className="session-status-value">{formatStatusLabel(connectionState)}</p>
+            <p className="session-status-label">Now</p>
+            <p className="session-status-value">{nowCopy.title}</p>
             <p className="session-meta">Started {startedAtLabel}</p>
-            <p className="session-meta">
-              Voice state: {voiceStateCopy[voiceState.status]}. Audio mode: {audioMode}.
-            </p>
+            <p className="session-meta">{nowCopy.body}</p>
+            <p className="session-meta">Next: {nextStepCopy}</p>
             {voiceState.status === "reconnecting" ? (
               <p className="session-meta">
                 Attempt {voiceState.attempt} of {MAX_RECONNECT_ATTEMPTS}: {voiceState.reason}
@@ -1079,21 +1250,45 @@ export default function LiveSessionPage() {
           </div>
         ) : null}
 
-        <section className="session-panels" aria-label="Live session details">
+        <section className="session-panels voice-session-layout" aria-label="Live session details">
           <div className="session-panel">
-            <p className="panel-label">Gemini Live</p>
-            <div className="mic-status">
-              <span
-                className={`mic-indicator mic-indicator-${connectionState}`}
-                aria-hidden="true"
-              />
-              <div>
-                <p className="mic-status-title">{voiceStateCopy[voiceState.status]}</p>
-                <p className="mic-status-copy">
-                  {voiceState.status === "reconnecting"
-                    ? "Recovering the live transport after a recoverable failure."
-                    : statusCopy[connectionState]}
+            <div className="live-status-hero">
+              <div className="transcript-header">
+                <div>
+                  <p className="panel-label">Current assistant state</p>
+                  <p className="transcript-subtitle">
+                    The primary demo story stays here so judges can read the session at a glance.
+                  </p>
+                </div>
+                <p className={`voice-phase-pill voice-phase-pill-${liveStatusTone}`}>
+                  {voiceStateCopy[voiceState.status]}
                 </p>
+              </div>
+
+              <div className={`live-status-callout live-status-callout-${liveStatusTone}`}>
+                <span
+                  className={`mic-indicator mic-indicator-${connectionState}`}
+                  aria-hidden="true"
+                />
+                <div>
+                  <p className="mic-status-title">{nowCopy.title}</p>
+                  <p className="mic-status-copy">{nowCopy.body}</p>
+                </div>
+              </div>
+
+              <div className="live-status-metrics">
+                <article className="live-status-metric">
+                  <p className="session-status-label">Connection</p>
+                  <p className="session-status-value">{formatStatusLabel(connectionState)}</p>
+                </article>
+                <article className="live-status-metric">
+                  <p className="session-status-label">Voice state</p>
+                  <p className="session-status-value">{formatStatusLabel(voiceState.status)}</p>
+                </article>
+                <article className="live-status-metric">
+                  <p className="session-status-label">Audio mode</p>
+                  <p className="session-status-value">{audioMode}</p>
+                </article>
               </div>
             </div>
 
@@ -1145,18 +1340,22 @@ export default function LiveSessionPage() {
               </button>
             </div>
 
-            <div className="tool-status-panel">
+            <div className="tool-status-panel assistant-panel">
               <div className="transcript-header">
                 <div>
-                  <p className="panel-label">Assistant output</p>
+                  <p className="panel-label">Assistant reply</p>
                   <p className="transcript-subtitle">
-                    The final assistant reply reflects the live tool result for this single demo
-                    slice.
+                    The spoken response updates here after the tool completes.
                   </p>
                 </div>
-                <p className="voice-phase-pill">{voiceState.status.replace("_", " ")}</p>
+                <p className="voice-phase-pill">Live reply</p>
               </div>
               <div className="voice-tool-result">
+                <p className="voice-tool-summary">
+                  {latestAssistantEntry
+                    ? "Latest assistant response"
+                    : "No assistant reply yet. Start the connection and let the turn complete."}
+                </p>
                 <pre className="tool-output">{assistantOutput}</pre>
               </div>
             </div>
@@ -1164,13 +1363,13 @@ export default function LiveSessionPage() {
             <div className="tool-status-panel">
               <div className="transcript-header">
                 <div>
-                  <p className="panel-label">Tool bridge</p>
+                  <p className="panel-label">Tool activity</p>
                   <p className="transcript-subtitle">
-                    One PersonaFlow phrase-card tool is exposed inside the live session.
+                    One PersonaFlow phrase-card tool runs inside the live session and feeds the reply.
                   </p>
                 </div>
                 <p className={`voice-tool-badge voice-tool-${toolState.status}`}>
-                  {toolState.status.replace("_", " ")}
+                  {toolState.status === "idle" ? "Waiting" : toolState.status.replace("_", " ")}
                 </p>
               </div>
               <div className="voice-tool-block">
@@ -1182,8 +1381,29 @@ export default function LiveSessionPage() {
                 <p className="voice-tool-summary">{toolState.summary}</p>
               </div>
               <div className="voice-tool-result">
-                <p className="panel-label">Result</p>
+                <p className="panel-label">Phrase-card preview</p>
                 <pre className="tool-output">{toolState.output}</pre>
+              </div>
+              <div className="tool-activity-feed">
+                {toolHistoryEntries.length > 0 ? (
+                  toolHistoryEntries.slice(-3).reverse().map((entry) => (
+                    <article
+                      className={`tool-activity-entry tool-activity-entry-${entry.kind}`}
+                      key={entry.id}
+                    >
+                      <p className="transcript-speaker">{entry.label}</p>
+                      <p className="transcript-text">{entry.text}</p>
+                    </article>
+                  ))
+                ) : (
+                  <div className="empty-inline-state">
+                    <p className="transcript-speaker">No tool activity yet</p>
+                    <p className="transcript-text">
+                      Once the learner turn is captured, the phrase-card preview call will show up
+                      here.
+                    </p>
+                  </div>
+                )}
               </div>
               {toolState.status === "failed" || toolState.status === "timed_out" ? (
                 <div className="voice-recovery-actions">
@@ -1198,39 +1418,66 @@ export default function LiveSessionPage() {
           <div className="session-panel transcript-panel">
             <div className="transcript-header">
               <div>
-                <p className="panel-label">Session events</p>
+                <p className="panel-label">Transcript and session feed</p>
                 <p className="transcript-subtitle">
-                  Spoken input, transcript events, tool activity, and assistant output all land
-                  here.
+                  Learner speech, assistant speech, tool activity, and recoverable issues are visually separated.
                 </p>
               </div>
-              <p className="transcript-session-id">Session {sessionId}</p>
+              <p className="transcript-session-id">Session started {startedAtLabel}</p>
             </div>
 
-            <div className="transcript-health-panel">
-              <p className="panel-label">Transcript health</p>
-              <p className="mic-status-title">{formatStatusLabel(transcriptHealth.status)}</p>
-              <p className="mic-status-copy">{transcriptHealth.summary}</p>
-              {transcriptHealth.status === "partial" ? (
-                <button className="secondary-button" type="button" onClick={handleRetryTurn}>
-                  Recover turn
-                </button>
-              ) : null}
+            <div className="transcript-overview-grid">
+              <div className="transcript-health-panel">
+                <div>
+                  <p className="panel-label">Transcript health</p>
+                  <p className="mic-status-title">{formatStatusLabel(transcriptHealth.status)}</p>
+                  <p className="mic-status-copy">{transcriptHealth.summary}</p>
+                </div>
+                {transcriptHealth.status === "partial" ? (
+                  <button className="secondary-button" type="button" onClick={handleRetryTurn}>
+                    Recover turn
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="transcript-snapshot-grid">
+                <article className="transcript-snapshot transcript-snapshot-user">
+                  <p className="transcript-speaker">Latest learner turn</p>
+                  <p className="transcript-text">
+                    {latestUserEntry?.text ??
+                      "No learner transcript yet. Start the connection to capture the first spoken turn."}
+                  </p>
+                </article>
+                <article className="transcript-snapshot transcript-snapshot-assistant">
+                  <p className="transcript-speaker">Latest assistant turn</p>
+                  <p className="transcript-text">
+                    {latestAssistantEntry?.text ??
+                      "No assistant reply yet. It will appear after the tool result returns."}
+                  </p>
+                </article>
+              </div>
             </div>
 
             <div className="transcript-feed" aria-live="polite">
               {eventFeed.length > 0 ? (
                 eventFeed.map((entry) => (
-                  <article className="transcript-entry" key={entry.id}>
-                    <p className="transcript-speaker">{entry.speaker}</p>
+                  <article
+                    className={`transcript-entry transcript-entry-${entry.kind}`}
+                    key={entry.id}
+                  >
+                    <div className="transcript-entry-header">
+                      <p className="transcript-speaker">{entry.speaker}</p>
+                      <p className={`voice-tool-badge voice-tool-${entry.kind}`}>{entry.label}</p>
+                    </div>
                     <p className="transcript-text">{entry.text}</p>
                   </article>
                 ))
               ) : (
                 <div className="empty-feed">
-                  <p className="transcript-speaker">No live events yet</p>
+                  <p className="transcript-speaker">No live activity yet</p>
                   <p className="transcript-text">
-                    Start the connection to run the spoken phrase-card scenario.
+                    Start the connection to show the learner turn, tool invocation, and assistant
+                    reply in one place.
                   </p>
                 </div>
               )}
@@ -1285,18 +1532,30 @@ export default function LiveSessionPage() {
           ) : null}
         </section>
 
-        <div className="session-actions">
-          {sessionError ? <p className="error-note">{sessionError}</p> : null}
-          {transcriptSaveError ? <p className="error-note">{transcriptSaveError}</p> : null}
-          {completionError ? <p className="error-note">{completionError}</p> : null}
-          <button
-            className="end-session-button"
-            type="button"
-            onClick={handleEndSession}
-            disabled={isEnding}
-          >
-            End Session
-          </button>
+        <div className="session-footer">
+          {visibleErrors.length > 0 ? (
+            <div className="session-alert-stack" role="status" aria-live="polite">
+              {visibleErrors.map((error, index) => (
+                <p className="error-note error-note-card" key={`${error}-${index}`}>
+                  {error}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="session-footer-note">
+              This demo stays focused on one clear moment: spoken input, tool handoff, and phrase-card-informed reply.
+            </p>
+          )}
+          <div className="session-actions">
+            <button
+              className="end-session-button"
+              type="button"
+              onClick={handleEndSession}
+              disabled={isEnding}
+            >
+              End Session
+            </button>
+          </div>
         </div>
       </section>
     </main>
