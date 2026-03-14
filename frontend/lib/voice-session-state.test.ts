@@ -46,6 +46,27 @@ test("captures the interrupted source state explicitly", () => {
   assert.deepEqual(state, { status: "interrupted", interruptedFrom: "speaking" });
 });
 
+test("tracks reconnect attempts and returns to connected", () => {
+  const state = applyEvents(
+    [
+      { type: "reconnect.request", attempt: 1, reason: "Socket dropped" },
+      { type: "connected" },
+    ],
+    { status: "speaking" },
+  );
+
+  assert.deepEqual(state, { status: "connected" });
+});
+
+test("recovers from interruption back to a ready state", () => {
+  const state = applyEvents(
+    [{ type: "interruption.recovered" }],
+    { status: "interrupted", interruptedFrom: "tool_running" },
+  );
+
+  assert.deepEqual(state, { status: "connected" });
+});
+
 test("stores recoverable and fatal errors explicitly", () => {
   const recoverable = voiceSessionReducer(
     { status: "tool_running" },
@@ -74,7 +95,15 @@ test("rejects invalid transitions", () => {
     /Invalid voice session transition: idle -> response\.started/,
   );
   assert.throws(
-    () => voiceSessionReducer({ status: "disconnected" }, { type: "mic.start" }),
+    () =>
+      voiceSessionReducer(
+        { status: "disconnected", reason: "remote" },
+        { type: "mic.start" },
+      ),
     /Invalid voice session transition: disconnected -> mic\.start/,
+  );
+  assert.throws(
+    () => voiceSessionReducer({ status: "connected" }, { type: "interruption.recovered" }),
+    /Invalid voice session transition: connected -> interruption\.recovered/,
   );
 });

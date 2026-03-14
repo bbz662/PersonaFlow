@@ -1,6 +1,7 @@
 export type VoiceSessionStatus =
   | "idle"
   | "connecting"
+  | "reconnecting"
   | "connected"
   | "listening"
   | "thinking"
@@ -13,6 +14,7 @@ export type VoiceSessionStatus =
 export type VoiceSessionState =
   | { status: "idle" }
   | { status: "connecting" }
+  | { status: "reconnecting"; attempt: number; reason: string }
   | { status: "connected" }
   | { status: "listening" }
   | { status: "thinking" }
@@ -25,11 +27,12 @@ export type VoiceSessionState =
         "idle" | "interrupted" | "disconnected" | "error"
       >;
     }
-  | { status: "disconnected" }
+  | { status: "disconnected"; reason: "client" | "remote" | "provider_error" }
   | { status: "error"; message: string; recoverable: boolean };
 
 export type VoiceSessionEvent =
   | { type: "connect.request" }
+  | { type: "reconnect.request"; attempt: number; reason: string }
   | { type: "connected" }
   | { type: "mic.start" }
   | { type: "mic.stop" }
@@ -39,7 +42,8 @@ export type VoiceSessionEvent =
   | { type: "tool.call.started" }
   | { type: "tool.call.finished" }
   | { type: "interruption" }
-  | { type: "disconnect" }
+  | { type: "interruption.recovered" }
+  | { type: "disconnect"; reason: "client" | "remote" | "provider_error" }
   | { type: "recoverable.error"; message: string }
   | { type: "fatal.error"; message: string };
 
@@ -65,8 +69,28 @@ export function voiceSessionReducer(
       }
       return invalidTransition(state, event);
 
+    case "reconnect.request":
+      if (
+        state.status === "connecting" ||
+        state.status === "connected" ||
+        state.status === "listening" ||
+        state.status === "thinking" ||
+        state.status === "speaking" ||
+        state.status === "tool_running" ||
+        state.status === "interrupted" ||
+        state.status === "disconnected" ||
+        state.status === "error"
+      ) {
+        return {
+          status: "reconnecting",
+          attempt: event.attempt,
+          reason: event.reason,
+        };
+      }
+      return invalidTransition(state, event);
+
     case "connected":
-      if (state.status === "connecting") {
+      if (state.status === "connecting" || state.status === "reconnecting") {
         return { status: "connected" };
       }
       return invalidTransition(state, event);
@@ -116,6 +140,7 @@ export function voiceSessionReducer(
     case "interruption":
       if (
         state.status === "connecting" ||
+        state.status === "reconnecting" ||
         state.status === "connected" ||
         state.status === "listening" ||
         state.status === "thinking" ||
@@ -126,11 +151,17 @@ export function voiceSessionReducer(
       }
       return invalidTransition(state, event);
 
+    case "interruption.recovered":
+      if (state.status === "interrupted") {
+        return { status: "connected" };
+      }
+      return invalidTransition(state, event);
+
     case "disconnect":
       if (state.status === "disconnected") {
         return invalidTransition(state, event);
       }
-      return { status: "disconnected" };
+      return { status: "disconnected", reason: event.reason };
 
     case "recoverable.error":
       return {

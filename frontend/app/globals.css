@@ -797,6 +797,28 @@ h1 {
   background: rgba(163, 63, 42, 0.08);
 }
 
+.voice-recovery-banner,
+.transcript-health-panel {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: center;
+  padding: 18px 20px;
+  border-radius: 20px;
+  border: 1px solid rgba(182, 92, 46, 0.16);
+  background: rgba(182, 92, 46, 0.08);
+}
+
+.transcript-health-panel {
+  margin-bottom: 18px;
+}
+
+.voice-recovery-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 960px) {
   .hero-card,
   .voice-grid-top,
@@ -809,6 +831,8 @@ h1 {
   }
 
   .voice-error-banner,
+  .voice-recovery-banner,
+  .transcript-health-panel,
   .voice-panel-header,
   .live-session-header,
   .results-header {

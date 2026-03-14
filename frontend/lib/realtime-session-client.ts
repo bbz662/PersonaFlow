@@ -68,6 +68,12 @@ export type RealtimeSessionLifecycleEvent =
       reason: "client" | "remote";
     };
 
+export type RealtimeClientEventInput = {
+  kind: string;
+  text?: string;
+  [key: string]: unknown;
+};
+
 export type RealtimeSessionErrorEvent =
   | {
       type: "recoverable.error";
@@ -96,6 +102,7 @@ export interface RealtimeSessionClient {
   connect(): void;
   disconnect(): void;
   sendUserAudio(chunk: AudioChunk): void;
+  sendClientEvent(event: RealtimeClientEventInput): void;
   sendUserTranscript(input: RealtimeUserTranscriptInput): void;
   sendToolResult(input: RealtimeToolResultInput): void;
   sendToolError(input: RealtimeToolErrorInput): void;

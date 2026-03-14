@@ -162,6 +162,10 @@ test("GeminiLiveClient translates transcript, audio, tool calls, and outgoing us
     language: "ja",
     turnIndex: 2,
   });
+  client.sendClientEvent({
+    kind: "response.cancel",
+    text: "Client requested immediate playback interruption.",
+  });
   client.sendToolResult({
     callId: "tool-1",
     name: "generate_phrase_card_preview",
@@ -210,7 +214,7 @@ test("GeminiLiveClient translates transcript, audio, tool calls, and outgoing us
     code: "timeout",
   });
 
-  assert.equal(socket.sent.length, 4);
+  assert.equal(socket.sent.length, 5);
   const sentPayload = JSON.parse(socket.sent[0] ?? "{}");
   assert.equal(sentPayload.type, "user.audio");
   assert.equal(sentPayload.audio.sample_rate, 24000);
@@ -226,12 +230,19 @@ test("GeminiLiveClient translates transcript, audio, tool calls, and outgoing us
     },
   });
   assert.deepEqual(JSON.parse(socket.sent[2] ?? "{}"), {
+    type: "client.event",
+    event: {
+      kind: "response.cancel",
+      text: "Client requested immediate playback interruption.",
+    },
+  });
+  assert.deepEqual(JSON.parse(socket.sent[3] ?? "{}"), {
     type: "tool.result",
     call_id: "tool-1",
     name: "generate_phrase_card_preview",
     result: { ok: true },
   });
-  assert.deepEqual(JSON.parse(socket.sent[3] ?? "{}"), {
+  assert.deepEqual(JSON.parse(socket.sent[4] ?? "{}"), {
     type: "tool.error",
     call_id: "tool-2",
     name: "generate_phrase_card_preview",
