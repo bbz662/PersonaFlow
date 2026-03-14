@@ -123,3 +123,67 @@ class LiveApiTests(unittest.TestCase):
                 )
                 self.assertEqual(assistant_event["event"]["speaker"], "agent")
                 self.assertIn("Tone: warm", assistant_event["event"]["text"])
+
+    def test_live_transport_turn_can_start_from_user_audio(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            from app.core.config import get_settings
+
+            get_settings.cache_clear()
+            app = create_app()
+            client = TestClient(app)
+
+            with client.websocket_connect("/sessions/session-voice/live") as websocket:
+                websocket.receive_json()
+                websocket.receive_json()
+
+                websocket.send_json(
+                    {
+                        "type": "user.audio",
+                        "audio": {
+                            "sample_rate": 16000,
+                            "samples": [0.1, 0.0, -0.1],
+                        },
+                    }
+                )
+
+                transcript_event = websocket.receive_json()
+                tool_event = websocket.receive_json()
+
+                self.assertEqual(transcript_event["event"]["kind"], "transcript")
+                self.assertEqual(transcript_event["event"]["speaker"], "user")
+                self.assertIn("made curry", transcript_event["event"]["text"])
+                self.assertEqual(tool_event["event"]["kind"], "tool_call")
+                self.assertEqual(
+                    tool_event["event"]["tool_call"]["arguments"]["utterance_text"],
+                    "I stayed in, made curry, and talked with my sister for hours.",
+                )
+
+                websocket.send_json(
+                    {
+                        "type": "tool.result",
+                        "call_id": tool_event["event"]["tool_call"]["id"],
+                        "name": "generate_phrase_card_preview",
+                        "result": {
+                            "tool_name": "generate_phrase_card_preview",
+                            "summary": "Prepared 1 phrase card preview.",
+                            "card_count": 1,
+                            "cards": [
+                                {
+                                    "english_expression": (
+                                        "I stayed in, made curry, and talked with my sister "
+                                        "for hours."
+                                    ),
+                                    "tone_tag": "warm",
+                                }
+                            ],
+                        },
+                    }
+                )
+
+                websocket.receive_json()
+                assistant_event = websocket.receive_json()
+                audio_event = websocket.receive_json()
+
+                self.assertEqual(assistant_event["event"]["kind"], "assistant_response")
+                self.assertEqual(audio_event["event"]["kind"], "response.audio")
+                self.assertGreater(len(audio_event["event"]["audio"]["samples"]), 0)

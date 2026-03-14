@@ -1,3 +1,4 @@
+import math
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -7,6 +8,7 @@ from app.core.config import get_settings
 
 router = APIRouter(tags=["live"])
 PHRASE_CARD_TOOL_NAME = "generate_phrase_card_preview"
+PRIMARY_DEMO_UTTERANCE = "I stayed in, made curry, and talked with my sister for hours."
 PHRASE_CARD_KEYWORDS = (
     "phrase card",
     "phrase cards",
@@ -32,6 +34,20 @@ def _extract_phrase_card_target(text: str) -> str:
     return candidate
 
 
+def _build_demo_audio_samples() -> list[float]:
+    sample_rate = 24_000
+    total_samples = 2_400
+    frequency_hz = 240
+    samples: list[float] = []
+
+    for index in range(total_samples):
+        envelope = 0.18 * (1 - (index / total_samples) * 0.35)
+        sample = math.sin((2 * math.pi * frequency_hz * index) / sample_rate) * envelope
+        samples.append(round(sample, 4))
+
+    return samples
+
+
 @router.websocket("/sessions/{session_id}/live")
 async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
     settings = get_settings()
@@ -54,10 +70,14 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
             "event": {
                 "kind": "transport_ready",
                 "speaker": "agent",
-                "text": "Live transport connected. Transcript capture and agent responses can attach here next.",
+                "text": (
+                    "Live transport connected. Start speaking to run the primary phrase-card "
+                    "demo flow."
+                ),
             },
         }
     )
+    turn_started = False
 
     try:
         while True:
@@ -74,6 +94,42 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
                 )
                 await websocket.close()
                 return
+
+            if message_type == "user.audio":
+                if turn_started:
+                    continue
+
+                turn_started = True
+                await websocket.send_json(
+                    {
+                        "type": "session.event",
+                        "event": {
+                            "kind": "transcript",
+                            "speaker": "user",
+                            "text": PRIMARY_DEMO_UTTERANCE,
+                        },
+                    }
+                )
+                await websocket.send_json(
+                    {
+                        "type": "session.event",
+                        "event": {
+                            "kind": "tool_call",
+                            "tool_call": {
+                                "id": str(uuid4()),
+                                "name": PHRASE_CARD_TOOL_NAME,
+                                "arguments": {
+                                    "utterance_text": _extract_phrase_card_target(
+                                        PRIMARY_DEMO_UTTERANCE
+                                    ),
+                                    "source_language": "ja",
+                                    "turn_index": 0,
+                                },
+                            },
+                        },
+                    }
+                )
+                continue
 
             if message_type == "client.event":
                 event = message.get("event") or {}
@@ -96,6 +152,7 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
                     )
 
                     if text and _should_request_phrase_card_tool(text):
+                        turn_started = True
                         await websocket.send_json(
                             {
                                 "type": "session.event",
@@ -180,6 +237,18 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
                             },
                         }
                     )
+                    await websocket.send_json(
+                        {
+                            "type": "session.event",
+                            "event": {
+                                "kind": "response.audio",
+                                "audio": {
+                                    "sample_rate": 24_000,
+                                    "samples": _build_demo_audio_samples(),
+                                },
+                            },
+                        }
+                    )
                 else:
                     await websocket.send_json(
                         {
@@ -191,6 +260,7 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
                             },
                         }
                     )
+                turn_started = False
                 continue
 
             if message_type == "tool.error":
@@ -217,6 +287,19 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
                         },
                     }
                 )
+                await websocket.send_json(
+                    {
+                        "type": "session.event",
+                        "event": {
+                            "kind": "assistant_response",
+                            "speaker": "agent",
+                            "text": (
+                                "The phrase-card preview failed. Try the same spoken scenario again."
+                            ),
+                        },
+                    }
+                )
+                turn_started = False
                 continue
     except WebSocketDisconnect:
         return
