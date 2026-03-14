@@ -16,6 +16,9 @@ class SettingsTests(unittest.TestCase):
 
         self.assertIsNone(settings.google_cloud_project)
         self.assertEqual(settings.firestore_database_id, "(default)")
+        self.assertTrue(settings.realtime_voice_enabled)
+        self.assertIsNone(settings.gemini_live_api_key)
+        self.assertIsNone(settings.gemini_live_model)
 
     def test_firestore_settings_read_from_env(self) -> None:
         with patch.dict(
@@ -23,6 +26,9 @@ class SettingsTests(unittest.TestCase):
             {
                 "GOOGLE_CLOUD_PROJECT": "persona-flow-dev",
                 "FIRESTORE_DATABASE_ID": "persona-db",
+                "REALTIME_VOICE_ENABLED": "false",
+                "GEMINI_LIVE_API_KEY": "live-secret",
+                "GEMINI_LIVE_MODEL": "gemini-live-preview",
             },
             clear=True,
         ):
@@ -31,3 +37,6 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(settings.google_cloud_project, "persona-flow-dev")
         self.assertEqual(settings.firestore_database_id, "persona-db")
+        self.assertFalse(settings.realtime_voice_enabled)
+        self.assertEqual(settings.gemini_live_api_key, "live-secret")
+        self.assertEqual(settings.gemini_live_model, "gemini-live-preview")

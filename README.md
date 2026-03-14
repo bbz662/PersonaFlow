@@ -143,9 +143,8 @@ At this stage, the focus is on:
 
 ## Local Development
 
-This section will be expanded as implementation progresses.
-
-Today the repository only establishes the top-level layout and shared environment variable contract. App-specific install steps will be refined in the dedicated frontend and backend scaffold issues.
+This section stays lightweight on purpose, but the repository now includes explicit
+configuration scaffolding for the optional realtime voice path.
 
 ### Expected prerequisites
 
@@ -163,6 +162,7 @@ Today the repository only establishes the top-level layout and shared environmen
 ```bash
 cd frontend
 npm install
+cp .env.local.example .env.local
 npm run dev
 ```
 
@@ -173,6 +173,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
 uvicorn app.main:app --reload
 ```
 
@@ -183,16 +184,49 @@ The exact variables may evolve, but the project is expected to require configura
 ```bash
 # Frontend
 NEXT_PUBLIC_API_BASE_URL=
+NEXT_PUBLIC_REALTIME_VOICE_ENABLED=true
+NEXT_PUBLIC_REALTIME_AUDIO_MODE=mock
 
 # Backend
 GOOGLE_CLOUD_PROJECT=
 FIRESTORE_DATABASE_ID=
 GEMINI_API_KEY=
+GEMINI_LIVE_API_KEY=
 GEMINI_MODEL=
+GEMINI_LIVE_MODEL=
+REALTIME_VOICE_ENABLED=true
 PORT=
 ```
 
-Use a local `.env` file for development and a secure secret management strategy for deployment. Copy from `.env.example` and fill in only the values needed by the app you are actively working on.
+Use local uncommitted env files for development and a secure secret management
+strategy for deployment. Copy from the committed examples and fill in only the values
+needed by the app you are actively working on.
+
+### Realtime voice toggle
+
+- `NEXT_PUBLIC_REALTIME_VOICE_ENABLED` controls whether the frontend exposes the
+  `/realtime` path and related UI entry points.
+- `REALTIME_VOICE_ENABLED` controls whether the backend accepts websocket
+  connections on `WS /sessions/{session_id}/live`.
+- Both flags default to `true` in the sample files to preserve the current demo
+  behavior, but either side can be turned off without invasive code changes.
+
+### Local development assumptions
+
+- `NEXT_PUBLIC_REALTIME_AUDIO_MODE=mock` is the safe default for the current hackathon
+  demo flow.
+- Browser microphone validation is opt-in via `NEXT_PUBLIC_REALTIME_AUDIO_MODE=browser`.
+- Gemini secrets stay on the backend only. The frontend should never receive provider
+  keys via `NEXT_PUBLIC_*` variables.
+
+### Future production assumptions
+
+- Keep provider credentials in Cloud Run environment variables or Secret Manager.
+- Prefer a dedicated `GEMINI_LIVE_API_KEY` only if the realtime voice path needs a
+  separate provider secret; otherwise `GEMINI_API_KEY` can remain the single backend
+  secret.
+- Disable realtime voice in deployments where the provider wiring is incomplete by
+  setting `REALTIME_VOICE_ENABLED=false`.
 
 ## Safety and Privacy Notes
 
@@ -231,3 +265,6 @@ Longer term, PersonaFlow aims to become a self-expression coach for second-langu
 ## Elevator Pitch
 
 PersonaFlow helps learners build an English voice that still feels like themselves by turning casual native-language conversations into personalized phrases and flashcards.
+
+
+

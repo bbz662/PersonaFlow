@@ -3,6 +3,20 @@ import os
 from dataclasses import dataclass
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+
+    return default
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str
@@ -12,7 +26,10 @@ class Settings:
     google_cloud_project: str | None
     firestore_database_id: str
     gemini_api_key: str | None
+    gemini_live_api_key: str | None
     gemini_model: str
+    gemini_live_model: str | None
+    realtime_voice_enabled: bool
 
     @property
     def is_development(self) -> bool:
@@ -31,6 +48,8 @@ def get_settings() -> Settings:
         google_cloud_project=os.getenv("GOOGLE_CLOUD_PROJECT") or None,
         firestore_database_id=os.getenv("FIRESTORE_DATABASE_ID") or "(default)",
         gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
+        gemini_live_api_key=os.getenv("GEMINI_LIVE_API_KEY") or None,
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
+        gemini_live_model=os.getenv("GEMINI_LIVE_MODEL") or None,
+        realtime_voice_enabled=_env_flag("REALTIME_VOICE_ENABLED", True),
     )
-

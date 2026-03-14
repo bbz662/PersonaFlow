@@ -4,6 +4,10 @@ import { useEffect, useReducer, useRef, useState } from "react";
 
 import { createAudioIO, createSineWaveChunk, type AudioIO, type AudioIOMode } from "../../lib/audio-io";
 import {
+  defaultRealtimeAudioMode,
+  realtimeVoiceEnabled,
+} from "../../lib/runtime-config";
+import {
   initialVoiceSessionState,
   voiceSessionReducer,
   type VoiceSessionEvent,
@@ -309,11 +313,15 @@ function ToolPanel({ status }: { status: VoiceSessionStatus }) {
 
 function resolveAudioMode(): AudioIOMode {
   if (typeof window === "undefined") {
-    return "mock";
+    return defaultRealtimeAudioMode;
   }
 
   const params = new URLSearchParams(window.location.search);
-  return params.get("audio") === "browser" ? "browser" : "mock";
+  if (params.get("audio") === "browser") {
+    return "browser";
+  }
+
+  return defaultRealtimeAudioMode;
 }
 
 function primaryActionLabel(status: VoiceSessionStatus) {
@@ -610,6 +618,25 @@ export default function RealtimeVoicePage() {
     });
   }
 
+  if (!realtimeVoiceEnabled) {
+    return (
+      <main className="session-shell">
+        <section className="live-session-card realtime-demo-card">
+          <header className="live-session-header">
+            <div>
+              <p className="eyebrow">Realtime voice demo</p>
+              <h1 className="session-title">Realtime voice is disabled.</h1>
+              <p className="lede">
+                Set <code>NEXT_PUBLIC_REALTIME_VOICE_ENABLED=true</code> to expose this
+                path locally. Keep the backend flag aligned with <code>REALTIME_VOICE_ENABLED=true</code> when you wire a live transport.
+              </p>
+            </div>
+          </header>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="session-shell">
       <section className="live-session-card realtime-demo-card">
@@ -688,3 +715,4 @@ export default function RealtimeVoicePage() {
     </main>
   );
 }
+

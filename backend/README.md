@@ -15,6 +15,7 @@ sudo apt install python3-venv python3-pip  # Ubuntu/WSL only, if missing
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
 python -m app.main
 ```
 
@@ -46,7 +47,10 @@ docker run --rm -p 8000:8080 \
   -e GOOGLE_CLOUD_PROJECT=your-project-id \
   -e FIRESTORE_DATABASE_ID='(default)' \
   -e GEMINI_API_KEY=your-gemini-api-key \
+  -e GEMINI_LIVE_API_KEY=your-gemini-live-api-key \
   -e GEMINI_MODEL=gemini-2.0-flash \
+  -e GEMINI_LIVE_MODEL=your-live-model-id \
+  -e REALTIME_VOICE_ENABLED=true \
   personaflow-backend
 ```
 
@@ -70,7 +74,10 @@ PORT=8000
 GOOGLE_CLOUD_PROJECT=
 FIRESTORE_DATABASE_ID=(default)
 GEMINI_API_KEY=
+GEMINI_LIVE_API_KEY=
 GEMINI_MODEL=gemini-2.0-flash
+GEMINI_LIVE_MODEL=
+REALTIME_VOICE_ENABLED=true
 ```
 
 Expected runtime behavior:
@@ -81,6 +88,30 @@ Expected runtime behavior:
 - `GOOGLE_CLOUD_PROJECT` and `FIRESTORE_DATABASE_ID` are only required when testing
   Firestore-backed routes.
 - `GEMINI_API_KEY` is only required when validating Gemini-backed phrase generation.
+- `GEMINI_LIVE_API_KEY` is optional. Use it only if realtime voice should use a
+  provider secret distinct from the standard Gemini key.
+- `GEMINI_LIVE_MODEL` is optional scaffolding for the future live transport path.
+- `REALTIME_VOICE_ENABLED` gates the websocket transport so the feature can be
+  disabled without code changes.
+
+## Realtime voice configuration
+
+Local development:
+
+- Keep `REALTIME_VOICE_ENABLED=true` only when you are actively validating the live
+  websocket path.
+- Store provider keys in local uncommitted env files only.
+- Keep audio handling ephemeral. The current backend route is a transport scaffold
+  and should not persist audio files.
+
+Future production assumptions:
+
+- Inject secrets through Cloud Run environment variables or Secret Manager, not from
+  committed files.
+- Keep realtime provider credentials server-side only; do not expose them as
+  `NEXT_PUBLIC_*` frontend variables.
+- Disable the realtime transport in environments where the provider wiring is not
+  ready by setting `REALTIME_VOICE_ENABLED=false`.
 
 ## Manual Artifact Registry push flow
 
@@ -108,6 +139,7 @@ Assumptions for that flow:
 ## Available routes
 
 - `GET /healthz`
+- `WS /sessions/{session_id}/live`
 - `POST /sessions/start`
 - `POST /sessions/{session_id}/transcript`
 - `POST /sessions/{session_id}/complete`
