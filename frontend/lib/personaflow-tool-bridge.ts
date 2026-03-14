@@ -1,4 +1,8 @@
 import type { RealtimeToolCallEvent } from "./realtime-session-client.ts";
+import type {
+  RealtimeLogFields,
+  RealtimeLogLevel,
+} from "./realtime-observability.ts";
 
 export const PHRASE_CARD_TOOL_NAME = "generate_phrase_card_preview" as const;
 const TOOL_TIMEOUT_MS = 8_000;
@@ -58,10 +62,13 @@ class ToolBridgeRequestError extends Error {
 export type ToolBridgeContext = {
   sessionId: string;
   apiBaseUrl: string;
+  observe?: (event: string, options?: { level?: RealtimeLogLevel; fields?: RealtimeLogFields }) => void;
 };
 
 export type ToolBridgeDispatchSuccess = {
   status: "completed";
+  requestId: string;
+  durationMs: number;
   result: PhraseCardPreviewResult;
 };
 
@@ -69,6 +76,8 @@ export type ToolBridgeDispatchFailure = {
   status: "failed";
   code: "unsupported_tool" | "bad_arguments" | "timeout" | "request_failed";
   message: string;
+  requestId: string | null;
+  durationMs: number;
 };
 
 export type ToolBridgeDispatchResult =
@@ -129,28 +138,60 @@ export class PersonaFlowToolBridge {
     request: RealtimeToolCallEvent,
     context: ToolBridgeContext,
   ): Promise<ToolBridgeDispatchResult> {
+    const startedAt = performance.now();
+
     if (request.name !== PHRASE_CARD_TOOL_NAME) {
+      context.observe?.("voice.tool.invocation.rejected", {
+        level: "warn",
+        fields: {
+          tool_call_id: request.callId,
+          tool_name: request.name,
+          reason: "unsupported_tool",
+        },
+      });
       return {
         status: "failed",
         code: "unsupported_tool",
         message: `Unsupported tool request: ${request.name}.`,
+        requestId: null,
+        durationMs: Math.round(performance.now() - startedAt),
       };
     }
 
     const args = readPhraseCardPreviewArgs(request.arguments);
     if (!args) {
+      context.observe?.("voice.tool.invocation.rejected", {
+        level: "warn",
+        fields: {
+          tool_call_id: request.callId,
+          tool_name: request.name,
+          reason: "bad_arguments",
+        },
+      });
       return {
         status: "failed",
         code: "bad_arguments",
         message: "Phrase card preview requests need utterance_text, source_language, and turn_index.",
+        requestId: null,
+        durationMs: Math.round(performance.now() - startedAt),
       };
     }
 
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), TOOL_TIMEOUT_MS);
+    const requestId = crypto.randomUUID();
+
+    context.observe?.("voice.tool.invocation.requested", {
+      fields: {
+        tool_call_id: request.callId,
+        tool_request_id: requestId,
+        tool_name: request.name,
+        turn_index: args.turn_index,
+        utterance_length: args.utterance_text.length,
+      },
+    });
 
     try {
-      const requestId = crypto.randomUUID();
       const response = await fetch(
         `${context.apiBaseUrl}/voice-agent/tools/execute`,
         {
@@ -171,6 +212,8 @@ export class PersonaFlowToolBridge {
       const payload = await readJson<VoiceAgentToolExecutionResponse>(response);
       return {
         status: "completed",
+        requestId: payload.request_id,
+        durationMs: Math.round(performance.now() - startedAt),
         result: {
           tool_name: payload.tool_name,
           summary: payload.result.summary,
@@ -184,6 +227,8 @@ export class PersonaFlowToolBridge {
           status: "failed",
           code: "timeout",
           message: "Phrase card preview timed out in the live session.",
+          requestId,
+          durationMs: Math.round(performance.now() - startedAt),
         };
       }
 
@@ -200,6 +245,8 @@ export class PersonaFlowToolBridge {
           error instanceof Error
             ? error.message
             : "Phrase card preview failed in the live session.",
+        requestId,
+        durationMs: Math.round(performance.now() - startedAt),
       };
     } finally {
       window.clearTimeout(timeout);

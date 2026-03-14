@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import perf_counter
 from typing import Annotated, Any
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.routes.sessions import get_phrase_card_service, get_session_repository
+from app.core.observability import log_observability_event
 from app.repositories.sessions import SessionRepository
 from app.services.phrase_cards import PhraseCardService
 from app.services.voice_agent_tools import (
@@ -153,24 +155,55 @@ def execute_tool(
     x_request_id: Annotated[str | None, Header(alias=REQUEST_ID_HEADER)] = None,
 ) -> VoiceAgentToolExecutionResponse:
     request_id = _resolve_request_id(x_request_id)
+    started_at = perf_counter()
     set_request_id_header(response, request_id)
-
-    if payload.tool_name != PHRASE_CARD_PREVIEW_TOOL_NAME:
-        raise VoiceAgentToolExecutionError(
-            status_code=400,
-            code="unsupported_tool",
-            message=f"Unsupported tool request: {payload.tool_name}.",
-            request_id=request_id,
-        )
-
-    result = facade.execute_phrase_card_preview(
+    log_observability_event(
+        "voice.tool.invocation.started",
         request_id=request_id,
         session_id=payload.session_id,
-        arguments=VoiceAgentPhraseCardPreviewArgs(
-            utterance_text=payload.arguments.utterance_text,
-            source_language=payload.arguments.source_language,
-            turn_index=payload.arguments.turn_index,
-        ),
+        tool_name=payload.tool_name,
+        turn_index=payload.arguments.turn_index,
+        source_language=payload.arguments.source_language,
+        utterance_length=len(payload.arguments.utterance_text),
+    )
+
+    try:
+        if payload.tool_name != PHRASE_CARD_PREVIEW_TOOL_NAME:
+            raise VoiceAgentToolExecutionError(
+                status_code=400,
+                code="unsupported_tool",
+                message=f"Unsupported tool request: {payload.tool_name}.",
+                request_id=request_id,
+            )
+
+        result = facade.execute_phrase_card_preview(
+            request_id=request_id,
+            session_id=payload.session_id,
+            arguments=VoiceAgentPhraseCardPreviewArgs(
+                utterance_text=payload.arguments.utterance_text,
+                source_language=payload.arguments.source_language,
+                turn_index=payload.arguments.turn_index,
+            ),
+        )
+    except VoiceAgentToolExecutionError as exc:
+        log_observability_event(
+            "voice.tool.invocation.failed",
+            level="warning" if exc.status_code < 500 else "error",
+            request_id=request_id,
+            session_id=payload.session_id,
+            tool_name=payload.tool_name,
+            code=exc.code,
+            duration_ms=round((perf_counter() - started_at) * 1000),
+        )
+        raise
+
+    log_observability_event(
+        "voice.tool.invocation.completed",
+        request_id=request_id,
+        session_id=result.session_id,
+        tool_name=result.tool_name,
+        card_count=result.card_count,
+        duration_ms=round((perf_counter() - started_at) * 1000),
     )
 
     return VoiceAgentToolExecutionResponse(

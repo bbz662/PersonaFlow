@@ -5,6 +5,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.observability import log_observability_event
 from app.repositories.sessions import SessionRepository
 from app.services.phrase_cards import PhraseCardService
 from app.services.session_summary import SessionSummaryService
@@ -160,6 +161,12 @@ def start_session(
             "started_at": started_at,
         },
     )
+    log_observability_event(
+        "voice.session.started",
+        session_id=session_id,
+        source_language=request.source_language,
+        target_language=request.target_language,
+    )
 
     return StartSessionResponse(
         session_id=session_id,
@@ -232,6 +239,11 @@ def complete_session(
             "processing_started_at": processing_started_at,
         },
     )
+    log_observability_event(
+        "voice.session.stopping",
+        session_id=session_id,
+        status="processing",
+    )
 
     try:
         phrase_cards = phrase_card_service.generate_for_session(session_id)
@@ -251,6 +263,12 @@ def complete_session(
         completed_payload["session_summary"] = session_summary
 
     repository.update_session(session_id, completed_payload)
+    log_observability_event(
+        "voice.session.completed",
+        session_id=session_id,
+        card_count=len(phrase_cards),
+        completed_at=completed_at,
+    )
 
     return CompleteSessionResponse(
         session_id=session_id,

@@ -58,6 +58,7 @@ test("GeminiLiveClient translates connection and close events", () => {
     type: "connection.state",
     state: "connected",
     session_id: "session-123",
+    connection_id: "conn-123",
   });
   client.disconnect();
   socket.message({
@@ -69,8 +70,8 @@ test("GeminiLiveClient translates connection and close events", () => {
 
   assert.deepEqual(connectionStates, ["connecting", "connected", "ended"]);
   assert.deepEqual(events, [
-    { type: "connected", sessionId: "session-123" },
-    { type: "session.closed", reason: "client" },
+    { type: "connected", sessionId: "session-123", connectionId: "conn-123" },
+    { type: "session.closed", reason: "client", connectionId: "conn-123" },
   ]);
   assert.deepEqual(socket.sent, [JSON.stringify({ type: "session.end" })]);
 });
@@ -95,6 +96,7 @@ test("GeminiLiveClient translates transcript, audio, tool calls, and outgoing us
     type: "connection.state",
     state: "connected",
     session_id: "session-456",
+    connection_id: "conn-456",
   });
   socket.message({
     type: "session.event",
@@ -179,7 +181,11 @@ test("GeminiLiveClient translates transcript, audio, tool calls, and outgoing us
   });
 
   assert.equal(events.length, 6);
-  assert.deepEqual(events[0], { type: "connected", sessionId: "session-456" });
+  assert.deepEqual(events[0], {
+    type: "connected",
+    sessionId: "session-456",
+    connectionId: "conn-456",
+  });
   assert.deepEqual(events[1], {
     type: "transcript.received",
     speaker: "agent",

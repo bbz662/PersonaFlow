@@ -62,10 +62,12 @@ export type RealtimeSessionLifecycleEvent =
   | {
       type: "connected";
       sessionId: string;
+      connectionId: string | null;
     }
   | {
       type: "session.closed";
       reason: "client" | "remote";
+      connectionId: string | null;
     };
 
 export type RealtimeClientEventInput = {
