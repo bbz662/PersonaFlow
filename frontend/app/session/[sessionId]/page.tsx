@@ -4,10 +4,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import { createGeminiLiveClient } from "../../../lib/gemini-live-client";
+import {
+  PersonaFlowToolBridge,
+  PHRASE_CARD_TOOL_NAME,
+  type PhraseCardPreviewResult,
+} from "../../../lib/personaflow-tool-bridge";
 import type {
   RealtimeConnectionState,
   RealtimeSessionClient,
   RealtimeSessionEvent,
+  RealtimeToolCallEvent,
 } from "../../../lib/realtime-session-client";
 
 type EventFeedEntry = {
@@ -26,6 +32,14 @@ type SessionCompletionResponse = {
 
 type SessionViewState = "live" | "processing";
 
+type ToolPanelState = {
+  status: "idle" | "running" | "completed" | "failed" | "timed_out";
+  name: string;
+  summary: string;
+  output: string;
+  callId: string | null;
+};
+
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -34,6 +48,14 @@ const statusCopy: Record<RealtimeConnectionState, string> = {
   connected: "Gemini Live is active and ready for session events.",
   failed: "The Gemini Live session could not connect. Try starting again.",
   ended: "The Gemini Live session is not active.",
+};
+
+const initialToolState: ToolPanelState = {
+  status: "idle",
+  name: "Phrase card preview",
+  summary: "Waiting for a tool request from the live session.",
+  output: "No tool run yet.",
+  callId: null,
 };
 
 function formatStatusLabel(status: RealtimeConnectionState) {
@@ -75,6 +97,20 @@ function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEn
         text: `${event.name} requested by Gemini Live.`,
       };
 
+    case "tool.result.received":
+      return {
+        id: `tool-result-${index}`,
+        speaker: "Tool result",
+        text: `${event.name} returned structured data to the live session.`,
+      };
+
+    case "tool.error.received":
+      return {
+        id: `tool-error-${index}`,
+        speaker: "Tool error",
+        text: `${event.name} failed: ${event.message}`,
+      };
+
     case "session.closed":
       return {
         id: `closed-${index}`,
@@ -101,10 +137,17 @@ export default function LiveSessionPage() {
   const searchParams = useSearchParams();
   const clientRef = useRef<RealtimeSessionClient | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const toolBridgeRef = useRef(new PersonaFlowToolBridge());
   const [connectionState, setConnectionState] = useState<RealtimeConnectionState>("ended");
   const [eventFeed, setEventFeed] = useState<EventFeedEntry[]>([]);
   const [viewState, setViewState] = useState<SessionViewState>("live");
   const [completionError, setCompletionError] = useState<string | null>(null);
+  const [utteranceText, setUtteranceText] = useState(
+    "Turn this into a phrase card: I stayed in, made curry, and talked with my sister for hours.",
+  );
+  const [utteranceError, setUtteranceError] = useState<string | null>(null);
+  const [toolState, setToolState] = useState<ToolPanelState>(initialToolState);
+  const [nextTurnIndex, setNextTurnIndex] = useState(0);
 
   const sessionId = params.sessionId;
   const startedAt = searchParams.get("startedAt");
@@ -134,6 +177,76 @@ export default function LiveSessionPage() {
     setEventFeed((current) => [...current, buildFeedEntry(event, current.length)]);
   }
 
+  function buildToolOutput(result: PhraseCardPreviewResult) {
+    if (result.cards.length === 0) {
+      return result.summary;
+    }
+
+    return result.cards
+      .slice(0, 2)
+      .map(
+        (card, index) =>
+          `${index + 1}. ${card.english_expression} (${card.tone_tag})`,
+      )
+      .join("\n");
+  }
+
+  async function handleToolCall(event: RealtimeToolCallEvent) {
+    setToolState({
+      status: "running",
+      name: event.name,
+      summary: "PersonaFlow is generating phrase card previews from the latest utterance.",
+      output: "Waiting for backend tool output...",
+      callId: event.callId,
+    });
+
+    const dispatchResult = await toolBridgeRef.current.dispatch(event, {
+      sessionId,
+      apiBaseUrl: API_BASE_URL,
+    });
+
+    if (dispatchResult.status === "completed") {
+      setToolState({
+        status: "completed",
+        name: event.name,
+        summary: dispatchResult.result.summary,
+        output: buildToolOutput(dispatchResult.result),
+        callId: event.callId,
+      });
+      clientRef.current?.sendToolResult({
+        callId: event.callId,
+        name: event.name,
+        result: dispatchResult.result,
+      });
+      return;
+    }
+
+    setToolState({
+      status: dispatchResult.code === "timeout" ? "timed_out" : "failed",
+      name: event.name,
+      summary: dispatchResult.message,
+      output:
+        dispatchResult.code === "timeout"
+          ? "The tool hit the live-session timeout before PersonaFlow could return previews."
+          : "The tool request failed before any phrase card preview could be returned.",
+      callId: event.callId,
+    });
+    clientRef.current?.sendToolError({
+      callId: event.callId,
+      name: event.name,
+      message: dispatchResult.message,
+      code: dispatchResult.code,
+    });
+  }
+
+  function handleRealtimeEvent(event: RealtimeSessionEvent) {
+    appendEvent(event);
+
+    if (event.type === "tool.call.requested") {
+      void handleToolCall(event);
+    }
+  }
+
   function handleStartConnection() {
     if (!canStart) {
       return;
@@ -142,6 +255,8 @@ export default function LiveSessionPage() {
     unsubscribeRef.current?.();
     clientRef.current?.disconnect();
     setEventFeed([]);
+    setToolState(initialToolState);
+    setUtteranceError(null);
 
     const client = createGeminiLiveClient({
       sessionId,
@@ -149,13 +264,34 @@ export default function LiveSessionPage() {
       onConnectionStateChange: setConnectionState,
     });
 
-    unsubscribeRef.current = client.subscribe(appendEvent);
+    unsubscribeRef.current = client.subscribe(handleRealtimeEvent);
     clientRef.current = client;
     client.connect();
   }
 
   function handleStopConnection() {
     clientRef.current?.disconnect();
+  }
+
+  function handleSendUtterance() {
+    const trimmed = utteranceText.trim();
+    if (!trimmed) {
+      setUtteranceError("Enter a learner utterance before sending it into the live session.");
+      return;
+    }
+
+    if (connectionState !== "connected") {
+      setUtteranceError("Connect the live session before sending a learner utterance.");
+      return;
+    }
+
+    setUtteranceError(null);
+    clientRef.current?.sendUserTranscript({
+      text: trimmed,
+      language: "ja",
+      turnIndex: nextTurnIndex,
+    });
+    setNextTurnIndex((current) => current + 1);
   }
 
   async function handleEndSession() {
@@ -268,6 +404,60 @@ export default function LiveSessionPage() {
               >
                 Stop Connection
               </button>
+            </div>
+
+            <div className="utterance-composer">
+              <label className="panel-label" htmlFor="live-utterance">
+                Demo utterance
+              </label>
+              <textarea
+                id="live-utterance"
+                className="session-textarea"
+                value={utteranceText}
+                onChange={(event) => setUtteranceText(event.target.value)}
+                placeholder="Say something natural, or ask PersonaFlow to pull out a phrase card."
+                rows={4}
+              />
+              <div className="transport-actions">
+                <button
+                  className="start-button"
+                  type="button"
+                  onClick={handleSendUtterance}
+                  disabled={connectionState !== "connected"}
+                >
+                  Send Utterance
+                </button>
+              </div>
+              <p className="session-meta">
+                Include "phrase card" in the utterance to trigger the live tool bridge.
+              </p>
+              {utteranceError ? <p className="error-note">{utteranceError}</p> : null}
+            </div>
+
+            <div className="tool-status-panel">
+              <div className="transcript-header">
+                <div>
+                  <p className="panel-label">Tool bridge</p>
+                  <p className="transcript-subtitle">
+                    One app-level PersonaFlow tool is available in the live session.
+                  </p>
+                </div>
+                <p className={`voice-tool-badge voice-tool-${toolState.status}`}>
+                  {toolState.status.replace("_", " ")}
+                </p>
+              </div>
+              <div className="voice-tool-block">
+                <p className="voice-tool-name">
+                  {toolState.name === PHRASE_CARD_TOOL_NAME
+                    ? "Phrase card preview"
+                    : toolState.name}
+                </p>
+                <p className="voice-tool-summary">{toolState.summary}</p>
+              </div>
+              <div className="voice-tool-result">
+                <p className="panel-label">Result</p>
+                <pre className="tool-output">{toolState.output}</pre>
+              </div>
             </div>
           </div>
 

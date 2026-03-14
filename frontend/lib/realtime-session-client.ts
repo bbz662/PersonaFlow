@@ -24,6 +24,40 @@ export type RealtimeToolCallEvent = {
   arguments: Record<string, unknown>;
 };
 
+export type RealtimeToolResultEvent = {
+  type: "tool.result.received";
+  callId: string;
+  name: string;
+  result: Record<string, unknown>;
+};
+
+export type RealtimeToolErrorEvent = {
+  type: "tool.error.received";
+  callId: string;
+  name: string;
+  message: string;
+  code: string;
+};
+
+export type RealtimeUserTranscriptInput = {
+  text: string;
+  language: string;
+  turnIndex: number;
+};
+
+export type RealtimeToolResultInput = {
+  callId: string;
+  name: string;
+  result: Record<string, unknown>;
+};
+
+export type RealtimeToolErrorInput = {
+  callId: string;
+  name: string;
+  message: string;
+  code: string;
+};
+
 export type RealtimeSessionLifecycleEvent =
   | {
       type: "connected";
@@ -49,6 +83,8 @@ export type RealtimeSessionEvent =
   | RealtimeTranscriptEvent
   | RealtimeAudioOutputEvent
   | RealtimeToolCallEvent
+  | RealtimeToolResultEvent
+  | RealtimeToolErrorEvent
   | RealtimeSessionErrorEvent;
 
 export type RealtimeSessionEventHandler = (
@@ -60,5 +96,8 @@ export interface RealtimeSessionClient {
   connect(): void;
   disconnect(): void;
   sendUserAudio(chunk: AudioChunk): void;
+  sendUserTranscript(input: RealtimeUserTranscriptInput): void;
+  sendToolResult(input: RealtimeToolResultInput): void;
+  sendToolError(input: RealtimeToolErrorInput): void;
   subscribe(listener: RealtimeSessionEventHandler): () => void;
 }

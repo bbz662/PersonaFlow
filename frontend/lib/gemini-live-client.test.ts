@@ -127,10 +127,54 @@ test("GeminiLiveClient translates transcript, audio, tool calls, and outgoing us
       },
     },
   });
+  socket.message({
+    type: "session.event",
+    event: {
+      kind: "tool_result",
+      tool_result: {
+        id: "tool-1",
+        name: "generate_phrase_card_preview",
+        result: {
+          tool_name: "generate_phrase_card_preview",
+          summary: "Prepared 1 phrase card preview.",
+          card_count: 1,
+          cards: [],
+        },
+      },
+    },
+  });
+  socket.message({
+    type: "session.event",
+    event: {
+      kind: "tool_error",
+      tool_error: {
+        id: "tool-2",
+        name: "generate_phrase_card_preview",
+        message: "Timed out.",
+        code: "timeout",
+      },
+    },
+  });
 
   client.sendUserAudio(createSineWaveChunk({ durationMs: 10 }));
+  client.sendUserTranscript({
+    text: "Turn this into a phrase card: I stayed in and made curry.",
+    language: "ja",
+    turnIndex: 2,
+  });
+  client.sendToolResult({
+    callId: "tool-1",
+    name: "generate_phrase_card_preview",
+    result: { ok: true },
+  });
+  client.sendToolError({
+    callId: "tool-2",
+    name: "generate_phrase_card_preview",
+    message: "Timed out.",
+    code: "timeout",
+  });
 
-  assert.equal(events.length, 4);
+  assert.equal(events.length, 6);
   assert.deepEqual(events[0], { type: "connected", sessionId: "session-456" });
   assert.deepEqual(events[1], {
     type: "transcript.received",
@@ -147,13 +191,55 @@ test("GeminiLiveClient translates transcript, audio, tool calls, and outgoing us
       text: "I always overthink before speaking.",
     },
   });
+  assert.deepEqual(events[4], {
+    type: "tool.result.received",
+    callId: "tool-1",
+    name: "generate_phrase_card_preview",
+    result: {
+      tool_name: "generate_phrase_card_preview",
+      summary: "Prepared 1 phrase card preview.",
+      card_count: 1,
+      cards: [],
+    },
+  });
+  assert.deepEqual(events[5], {
+    type: "tool.error.received",
+    callId: "tool-2",
+    name: "generate_phrase_card_preview",
+    message: "Timed out.",
+    code: "timeout",
+  });
 
-  assert.equal(socket.sent.length, 1);
+  assert.equal(socket.sent.length, 4);
   const sentPayload = JSON.parse(socket.sent[0] ?? "{}");
   assert.equal(sentPayload.type, "user.audio");
   assert.equal(sentPayload.audio.sample_rate, 24000);
   assert.ok(Array.isArray(sentPayload.audio.samples));
   assert.ok(sentPayload.audio.samples.length > 0);
+  assert.deepEqual(JSON.parse(socket.sent[1] ?? "{}"), {
+    type: "client.event",
+    event: {
+      kind: "user.transcript",
+      text: "Turn this into a phrase card: I stayed in and made curry.",
+      language: "ja",
+      turn_index: 2,
+    },
+  });
+  assert.deepEqual(JSON.parse(socket.sent[2] ?? "{}"), {
+    type: "tool.result",
+    call_id: "tool-1",
+    name: "generate_phrase_card_preview",
+    result: { ok: true },
+  });
+  assert.deepEqual(JSON.parse(socket.sent[3] ?? "{}"), {
+    type: "tool.error",
+    call_id: "tool-2",
+    name: "generate_phrase_card_preview",
+    error: {
+      message: "Timed out.",
+      code: "timeout",
+    },
+  });
 });
 
 test("GeminiLiveClient surfaces transport failures as recoverable errors", () => {

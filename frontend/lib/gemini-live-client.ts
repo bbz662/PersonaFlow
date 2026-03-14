@@ -2,8 +2,11 @@ import type { AudioChunk } from "./audio-io-chunk.ts";
 import type {
   RealtimeConnectionState,
   RealtimeSessionClient,
+  RealtimeToolErrorInput,
   RealtimeSessionEvent,
   RealtimeSessionEventHandler,
+  RealtimeToolResultInput,
+  RealtimeUserTranscriptInput,
 } from "./realtime-session-client.ts";
 
 type ProviderSocket = {
@@ -48,6 +51,17 @@ type ProviderEventPayload = {
     id?: string;
     name?: string;
     arguments?: Record<string, unknown>;
+  };
+  tool_result?: {
+    id?: string;
+    name?: string;
+    result?: Record<string, unknown>;
+  };
+  tool_error?: {
+    id?: string;
+    name?: string;
+    message?: string;
+    code?: string;
   };
   function_call?: {
     id?: string;
@@ -96,6 +110,35 @@ function mapProviderEvent(event: ProviderEventPayload): RealtimeSessionEvent | n
       callId: toolCall.id ?? crypto.randomUUID(),
       name: toolCall.name,
       arguments: toolCall.arguments ?? {},
+    };
+  }
+
+  if (event.kind === "tool_result") {
+    const toolResult = event.tool_result;
+    if (!toolResult?.name) {
+      return null;
+    }
+
+    return {
+      type: "tool.result.received",
+      callId: toolResult.id ?? crypto.randomUUID(),
+      name: toolResult.name,
+      result: toolResult.result ?? {},
+    };
+  }
+
+  if (event.kind === "tool_error") {
+    const toolError = event.tool_error;
+    if (!toolError?.name) {
+      return null;
+    }
+
+    return {
+      type: "tool.error.received",
+      callId: toolError.id ?? crypto.randomUUID(),
+      name: toolError.name,
+      message: toolError.message ?? "Tool execution failed.",
+      code: toolError.code ?? "tool_error",
     };
   }
 
@@ -225,6 +268,57 @@ export class GeminiLiveClient implements RealtimeSessionClient {
         audio: {
           sample_rate: chunk.sampleRate,
           samples: Array.from(chunk.samples),
+        },
+      }),
+    );
+  }
+
+  sendUserTranscript(input: RealtimeUserTranscriptInput) {
+    if (!this.socket || this.currentState !== "connected") {
+      return;
+    }
+
+    this.socket.send(
+      JSON.stringify({
+        type: "client.event",
+        event: {
+          kind: "user.transcript",
+          text: input.text,
+          language: input.language,
+          turn_index: input.turnIndex,
+        },
+      }),
+    );
+  }
+
+  sendToolResult(input: RealtimeToolResultInput) {
+    if (!this.socket || this.currentState !== "connected") {
+      return;
+    }
+
+    this.socket.send(
+      JSON.stringify({
+        type: "tool.result",
+        call_id: input.callId,
+        name: input.name,
+        result: input.result,
+      }),
+    );
+  }
+
+  sendToolError(input: RealtimeToolErrorInput) {
+    if (!this.socket || this.currentState !== "connected") {
+      return;
+    }
+
+    this.socket.send(
+      JSON.stringify({
+        type: "tool.error",
+        call_id: input.callId,
+        name: input.name,
+        error: {
+          message: input.message,
+          code: input.code,
         },
       }),
     );

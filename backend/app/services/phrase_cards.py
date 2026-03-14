@@ -71,6 +71,35 @@ class PhraseCardService:
     def list_for_session(self, session_id: str) -> list[dict[str, str]]:
         return self._repository.list_phrase_cards(session_id)
 
+    def preview_for_text(
+        self,
+        *,
+        text: str,
+        source_language: str,
+        turn_index: int,
+    ) -> list[dict[str, str]]:
+        transcript_entries = [
+            {
+                "entry_id": "preview-entry",
+                "speaker": "user",
+                "text": text,
+                "language": source_language,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "turn_index": turn_index,
+            }
+        ]
+        drafts = self._build_phrase_card_drafts(transcript_entries)
+
+        return [
+            {
+                "source_text": draft.source_text,
+                "english_expression": draft.english_expression,
+                "tone_tag": draft.tone_tag,
+                "usage_note": draft.usage_note,
+            }
+            for draft in drafts
+        ]
+
     def _build_phrase_card_drafts(
         self, transcript_entries: list[dict[str, Any]]
     ) -> list[PhraseCardDraft]:

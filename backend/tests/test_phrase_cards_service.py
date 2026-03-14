@@ -95,3 +95,20 @@ class PhraseCardServiceTests(unittest.TestCase):
             ValueError, "At least one user transcript entry is required"
         ):
             PhraseCardService(repository=repository).generate_for_session("session-123")
+
+    def test_preview_for_text_returns_non_persisted_cards(self) -> None:
+        repository = Mock()
+
+        cards = PhraseCardService(repository=repository).preview_for_text(
+            text="I like keeping things relaxed instead of too formal.",
+            source_language="ja",
+            turn_index=0,
+        )
+
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(
+            cards[0]["english_expression"],
+            "I like keeping things relaxed instead of too formal.",
+        )
+        repository.add_phrase_card.assert_not_called()
+        repository.list_transcript_entries.assert_not_called()
