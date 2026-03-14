@@ -1,10 +1,11 @@
 import type { AudioChunk } from "./audio-io-chunk.ts";
 import type {
+  RealtimeClientEventInput,
   RealtimeConnectionState,
   RealtimeSessionClient,
-  RealtimeToolErrorInput,
   RealtimeSessionEvent,
   RealtimeSessionEventHandler,
+  RealtimeToolErrorInput,
   RealtimeToolResultInput,
   RealtimeUserTranscriptInput,
 } from "./realtime-session-client.ts";
@@ -274,6 +275,15 @@ export class GeminiLiveClient implements RealtimeSessionClient {
   }
 
   sendUserTranscript(input: RealtimeUserTranscriptInput) {
+    this.sendClientEvent({
+      kind: "user.transcript",
+      text: input.text,
+      language: input.language,
+      turn_index: input.turnIndex,
+    });
+  }
+
+  sendClientEvent(event: RealtimeClientEventInput) {
     if (!this.socket || this.currentState !== "connected") {
       return;
     }
@@ -281,12 +291,7 @@ export class GeminiLiveClient implements RealtimeSessionClient {
     this.socket.send(
       JSON.stringify({
         type: "client.event",
-        event: {
-          kind: "user.transcript",
-          text: input.text,
-          language: input.language,
-          turn_index: input.turnIndex,
-        },
+        event,
       }),
     );
   }

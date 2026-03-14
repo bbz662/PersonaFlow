@@ -51,8 +51,19 @@ type ToolPanelState = {
   callId: string | null;
 };
 
+type TranscriptHealthState = {
+  status: "idle" | "capturing" | "partial" | "complete";
+  summary: string;
+};
+
+type StartConnectionOptions = {
+  reconnect?: boolean;
+};
+
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const MAX_RECONNECT_ATTEMPTS = 2;
+const RECONNECT_DELAY_MS = 1_200;
 
 const statusCopy: Record<RealtimeConnectionState, string> = {
   connecting: "Opening the Gemini Live session.",
@@ -64,12 +75,13 @@ const statusCopy: Record<RealtimeConnectionState, string> = {
 const voiceStateCopy: Record<VoiceSessionState["status"], string> = {
   idle: "Ready to connect",
   connecting: "Connecting live session",
+  reconnecting: "Recovering the live session",
   connected: "Connected and waiting for a turn",
   listening: "Listening to the learner",
   thinking: "Preparing the tool handoff",
   tool_running: "Running phrase-card preview",
   speaking: "Playing the assistant reply",
-  interrupted: "Session interrupted",
+  interrupted: "Playback interrupted",
   disconnected: "Connection closed",
   error: "Attention needed",
 };
@@ -80,6 +92,11 @@ const initialToolState: ToolPanelState = {
   summary: "Waiting for the live session to invoke the PersonaFlow tool.",
   output: "No tool run yet.",
   callId: null,
+};
+
+const initialTranscriptHealth: TranscriptHealthState = {
+  status: "idle",
+  summary: "No live transcript captured yet.",
 };
 
 function formatStatusLabel(status: string) {
@@ -159,6 +176,15 @@ function resolveAudioMode(searchParams: ReturnType<typeof useSearchParams>): Aud
   return searchParams.get("audio") === "browser" ? "browser" : defaultRealtimeAudioMode;
 }
 
+function isTurnActive(status: VoiceSessionState["status"]) {
+  return (
+    status === "listening" ||
+    status === "thinking" ||
+    status === "tool_running" ||
+    status === "speaking"
+  );
+}
+
 export default function LiveSessionPage() {
   const params = useParams<{ sessionId: string }>();
   const router = useRouter();
@@ -169,6 +195,9 @@ export default function LiveSessionPage() {
   const toolBridgeRef = useRef(new PersonaFlowToolBridge());
   const voiceStateRef = useRef<VoiceSessionState>(initialVoiceSessionState);
   const shouldAutoStartTurnRef = useRef(true);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const manualDisconnectRef = useRef(false);
   const inputChunkCountRef = useRef(0);
   const transcriptTurnIndexRef = useRef(0);
   const [voiceState, dispatchVoiceState] = useReducer(
@@ -186,15 +215,28 @@ export default function LiveSessionPage() {
   );
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [transcriptSaveError, setTranscriptSaveError] = useState<string | null>(null);
+  const [transcriptHealth, setTranscriptHealth] =
+    useState<TranscriptHealthState>(initialTranscriptHealth);
 
   const sessionId = params.sessionId;
   const audioMode = resolveAudioMode(searchParams);
   const startedAt = searchParams.get("startedAt");
   const startedAtLabel = startedAt ? new Date(startedAt).toLocaleString() : "Just now";
-  const canStart = connectionState === "ended" || connectionState === "failed";
+  const canStart =
+    connectionState === "ended" ||
+    connectionState === "failed" ||
+    voiceState.status === "disconnected" ||
+    voiceState.status === "error";
   const canStop =
-    connectionState === "connecting" || connectionState === "connected";
+    connectionState === "connecting" ||
+    connectionState === "connected" ||
+    voiceState.status === "reconnecting";
   const isEnding = viewState === "processing";
+  const canRetryTurn =
+    connectionState === "connected" &&
+    ["connected", "listening", "thinking", "tool_running", "speaking", "interrupted"].includes(
+      voiceState.status,
+    );
 
   useEffect(() => {
     voiceStateRef.current = voiceState;
@@ -202,46 +244,42 @@ export default function LiveSessionPage() {
 
   function dispatchIfValid(event: VoiceSessionEvent) {
     const currentState = voiceStateRef.current;
-    const status = currentState.status;
 
-    if (
-      (event.type === "connect.request" &&
-        !["idle", "disconnected", "interrupted", "error"].includes(status)) ||
-      (event.type === "connected" && status !== "connecting") ||
-      (event.type === "mic.start" && status !== "connected") ||
-      (event.type === "mic.stop" && status !== "listening") ||
-      (event.type === "speech.detected" && status !== "listening") ||
-      (event.type === "tool.call.started" && status !== "thinking") ||
-      (event.type === "tool.call.finished" && status !== "tool_running") ||
-      (event.type === "response.started" && status !== "thinking") ||
-      (event.type === "response.ended" && status !== "speaking") ||
-      (event.type === "interruption" &&
-        ![
-          "connecting",
-          "connected",
-          "listening",
-          "thinking",
-          "speaking",
-          "tool_running",
-        ].includes(status)) ||
-      (event.type === "disconnect" && status === "disconnected")
-    ) {
-      return;
+    try {
+      voiceStateRef.current = voiceSessionReducer(currentState, event);
+      dispatchVoiceState(event);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("Invalid voice session transition:")
+      ) {
+        return;
+      }
+
+      throw error;
     }
-
-    voiceStateRef.current = voiceSessionReducer(currentState, event);
-    dispatchVoiceState(event);
   }
 
   function appendEvent(event: RealtimeSessionEvent) {
     setEventFeed((current) => [...current, buildFeedEntry(event, current.length)]);
   }
 
-  function resetTurnCycle() {
-    inputChunkCountRef.current = 0;
-    setToolState(initialToolState);
-    setAssistantOutput("Listening for the next spoken turn.");
-    setSessionError(null);
+  function appendLocalEvent(speaker: string, text: string) {
+    setEventFeed((current) => [
+      ...current,
+      {
+        id: `local-${current.length}-${crypto.randomUUID()}`,
+        speaker,
+        text,
+      },
+    ]);
+  }
+
+  function clearReconnectTimer() {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
   }
 
   function buildToolOutput(result: PhraseCardPreviewResult) {
@@ -256,6 +294,30 @@ export default function LiveSessionPage() {
           `${index + 1}. ${card.english_expression} (${card.tone_tag})\n   ${card.usage_note}`,
       )
       .join("\n");
+  }
+
+  function resetTurnCycle() {
+    inputChunkCountRef.current = 0;
+    setToolState(initialToolState);
+    setAssistantOutput("Listening for the next spoken turn.");
+    setSessionError(null);
+    setTranscriptHealth({
+      status: "capturing",
+      summary: "Listening for a clean user transcript.",
+    });
+  }
+
+  function markTranscriptPartial(summary: string) {
+    setTranscriptHealth((current) => {
+      if (current.status === "complete") {
+        return current;
+      }
+
+      return {
+        status: "partial",
+        summary,
+      };
+    });
   }
 
   async function persistTranscriptEntry(
@@ -341,6 +403,7 @@ export default function LiveSessionPage() {
       callId: event.callId,
     });
     setSessionError(dispatchResult.message);
+    setAssistantOutput("The phrase-card preview did not finish. Retry the turn to recover.");
     clientRef.current?.sendToolError({
       callId: event.callId,
       name: event.name,
@@ -349,11 +412,102 @@ export default function LiveSessionPage() {
     });
   }
 
+  function teardownTransport() {
+    clearReconnectTimer();
+    unsubscribeRef.current?.();
+    unsubscribeRef.current = null;
+    clientRef.current?.disconnect();
+    clientRef.current = null;
+    inputChunkCountRef.current = 0;
+    void audioRef.current?.stopInput();
+    audioRef.current?.flushPlayback();
+  }
+
+  function scheduleReconnect(reason: string) {
+    if (manualDisconnectRef.current || isEnding || reconnectTimerRef.current !== null) {
+      return false;
+    }
+
+    if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
+      return false;
+    }
+
+    reconnectAttemptRef.current += 1;
+    shouldAutoStartTurnRef.current = false;
+    markTranscriptPartial("The turn was interrupted before the transcript fully settled.");
+    teardownTransport();
+    dispatchIfValid({
+      type: "reconnect.request",
+      attempt: reconnectAttemptRef.current,
+      reason,
+    });
+    setSessionError(
+      `${reason} Reconnecting automatically (${reconnectAttemptRef.current}/${MAX_RECONNECT_ATTEMPTS}).`,
+    );
+    appendLocalEvent(
+      "Recovery",
+      `Reconnect scheduled after a recoverable live-session failure: ${reason}`,
+    );
+
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      handleStartConnection({ reconnect: true });
+    }, RECONNECT_DELAY_MS);
+
+    return true;
+  }
+
+  async function interruptCurrentTurn({
+    restartTurn = false,
+  }: {
+    restartTurn?: boolean;
+  } = {}) {
+    if (connectionState !== "connected") {
+      return;
+    }
+
+    const currentStatus = voiceStateRef.current.status;
+    if (!isTurnActive(currentStatus) && currentStatus !== "interrupted") {
+      return;
+    }
+
+    shouldAutoStartTurnRef.current = false;
+    clientRef.current?.sendClientEvent({
+      kind: "response.cancel",
+      text: "Client requested immediate playback interruption.",
+    });
+    await audioRef.current?.stopInput();
+    audioRef.current?.flushPlayback();
+    appendLocalEvent("Recovery", "Current playback was interrupted intentionally.");
+    markTranscriptPartial("The current spoken turn was interrupted before it completed.");
+
+    if (currentStatus !== "interrupted") {
+      dispatchIfValid({ type: "interruption" });
+    }
+
+    dispatchIfValid({ type: "interruption.recovered" });
+    setAssistantOutput("Playback stopped. Start the turn again when you are ready.");
+    setSessionError(null);
+
+    if (restartTurn) {
+      handleStartTurn();
+    }
+  }
+
   async function handleRealtimeEvent(event: RealtimeSessionEvent) {
     appendEvent(event);
 
     if (event.type === "connected") {
-      dispatchIfValid({ type: "connected" });
+      clearReconnectTimer();
+      setSessionError(null);
+      if (voiceStateRef.current.status !== "connected") {
+        dispatchIfValid({ type: "connected" });
+      }
+
+      if (reconnectAttemptRef.current > 0) {
+        setAssistantOutput("Connection recovered. Run the demo turn again.");
+      }
+      reconnectAttemptRef.current = 0;
       return;
     }
 
@@ -362,6 +516,10 @@ export default function LiveSessionPage() {
         setAssistantOutput(event.text);
         void persistTranscriptEntry("agent", event.text, "en");
       } else if (event.speaker === "user") {
+        setTranscriptHealth({
+          status: "complete",
+          summary: "The latest user turn was captured and saved for recovery.",
+        });
         void persistTranscriptEntry("user", event.text, "ja");
       }
       return;
@@ -392,51 +550,80 @@ export default function LiveSessionPage() {
       return;
     }
 
-    if (event.type === "tool.result.received" || event.type === "tool.error.received") {
+    if (event.type === "tool.result.received") {
       if (voiceStateRef.current.status === "tool_running") {
         dispatchIfValid({ type: "tool.call.finished" });
       }
       return;
     }
 
-    if (event.type === "recoverable.error" || event.type === "fatal.error") {
+    if (event.type === "tool.error.received") {
+      if (voiceStateRef.current.status === "tool_running") {
+        dispatchIfValid({ type: "tool.call.finished" });
+      }
       setSessionError(event.message);
+      return;
+    }
+
+    if (event.type === "recoverable.error") {
+      setSessionError(event.message);
+      if (!scheduleReconnect(event.message)) {
+        dispatchIfValid({
+          type: "recoverable.error",
+          message: event.message,
+        });
+      }
+      return;
+    }
+
+    if (event.type === "fatal.error") {
+      setSessionError(event.message);
+      markTranscriptPartial("The live session failed before the current turn completed.");
       dispatchIfValid({
-        type: event.type,
+        type: "fatal.error",
         message: event.message,
       });
       return;
     }
 
     if (event.type === "session.closed") {
-      dispatchIfValid({ type: "disconnect" });
+      if (event.reason === "remote" && scheduleReconnect("The provider closed the live session.")) {
+        return;
+      }
+
+      dispatchIfValid({
+        type: "disconnect",
+        reason: event.reason === "client" ? "client" : "remote",
+      });
     }
   }
 
-  function disconnectTransport() {
-    unsubscribeRef.current?.();
-    clientRef.current?.disconnect();
-    unsubscribeRef.current = null;
-    clientRef.current = null;
-    inputChunkCountRef.current = 0;
-    void audioRef.current?.stopInput();
-    audioRef.current?.flushPlayback();
-  }
-
-  function handleStartConnection() {
-    if (!canStart) {
+  function handleStartConnection(options: StartConnectionOptions = {}) {
+    if (!options.reconnect && !canStart) {
       return;
     }
 
-    disconnectTransport();
-    shouldAutoStartTurnRef.current = true;
-    transcriptTurnIndexRef.current = 0;
-    setEventFeed([]);
-    setToolState(initialToolState);
-    setAssistantOutput("Waiting for the live session to start.");
-    setSessionError(null);
-    setTranscriptSaveError(null);
-    dispatchIfValid({ type: "connect.request" });
+    teardownTransport();
+    manualDisconnectRef.current = false;
+
+    if (options.reconnect) {
+      setAssistantOutput("Recovering live connection. Retry the turn once the session is ready.");
+      setSessionError(
+        `Retrying live connection (${reconnectAttemptRef.current}/${MAX_RECONNECT_ATTEMPTS}).`,
+      );
+      shouldAutoStartTurnRef.current = false;
+    } else {
+      reconnectAttemptRef.current = 0;
+      shouldAutoStartTurnRef.current = true;
+      transcriptTurnIndexRef.current = 0;
+      setEventFeed([]);
+      setToolState(initialToolState);
+      setAssistantOutput("Waiting for the live session to start.");
+      setSessionError(null);
+      setTranscriptSaveError(null);
+      setTranscriptHealth(initialTranscriptHealth);
+      dispatchIfValid({ type: "connect.request" });
+    }
 
     const client = createGeminiLiveClient({
       sessionId,
@@ -452,7 +639,7 @@ export default function LiveSessionPage() {
   }
 
   function handleStartTurn() {
-    if (connectionState !== "connected" || voiceState.status !== "connected") {
+    if (connectionState !== "connected" || voiceStateRef.current.status !== "connected") {
       return;
     }
 
@@ -460,11 +647,27 @@ export default function LiveSessionPage() {
     dispatchIfValid({ type: "mic.start" });
   }
 
+  function handleRetryTurn() {
+    if (connectionState !== "connected") {
+      return;
+    }
+
+    if (voiceStateRef.current.status === "connected") {
+      handleStartTurn();
+      return;
+    }
+
+    void interruptCurrentTurn({ restartTurn: true });
+  }
+
   function handleStopConnection() {
+    manualDisconnectRef.current = true;
     shouldAutoStartTurnRef.current = false;
-    disconnectTransport();
+    markTranscriptPartial("The current turn was stopped before completion.");
+    teardownTransport();
     setConnectionState("ended");
-    dispatchIfValid({ type: "disconnect" });
+    setSessionError(null);
+    dispatchIfValid({ type: "disconnect", reason: "client" });
   }
 
   async function handleEndSession() {
@@ -474,8 +677,9 @@ export default function LiveSessionPage() {
 
     setCompletionError(null);
     setViewState("processing");
+    manualDisconnectRef.current = true;
     shouldAutoStartTurnRef.current = false;
-    disconnectTransport();
+    teardownTransport();
 
     try {
       const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/complete`, {
@@ -535,7 +739,8 @@ export default function LiveSessionPage() {
     });
 
     return () => {
-      disconnectTransport();
+      manualDisconnectRef.current = true;
+      teardownTransport();
       void audioRef.current?.dispose();
       audioRef.current = null;
     };
@@ -624,6 +829,11 @@ export default function LiveSessionPage() {
             <p className="session-meta">
               Voice state: {voiceStateCopy[voiceState.status]}. Audio mode: {audioMode}.
             </p>
+            {voiceState.status === "reconnecting" ? (
+              <p className="session-meta">
+                Attempt {voiceState.attempt} of {MAX_RECONNECT_ATTEMPTS}: {voiceState.reason}
+              </p>
+            ) : null}
           </div>
         </header>
 
@@ -635,10 +845,49 @@ export default function LiveSessionPage() {
               </p>
               <p className="voice-error-title">{voiceState.message}</p>
               <p className="voice-status-copy">
-                Retry the live connection to run the same primary spoken scenario again.
+                Retry the live connection to return to the same demo scenario.
               </p>
             </div>
-            <button className="secondary-button" type="button" onClick={handleStartConnection}>
+            <button className="secondary-button" type="button" onClick={() => handleStartConnection()}>
+              Retry connection
+            </button>
+          </div>
+        ) : null}
+
+        {voiceState.status === "reconnecting" ? (
+          <div className="voice-recovery-banner" role="status" aria-live="polite">
+            <div>
+              <p className="panel-label">Recovering live session</p>
+              <p className="voice-error-title">{voiceState.reason}</p>
+              <p className="voice-status-copy">
+                PersonaFlow is reopening the session automatically. If it stalls, trigger a retry
+                manually.
+              </p>
+            </div>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => handleStartConnection({ reconnect: true })}
+            >
+              Reconnect now
+            </button>
+          </div>
+        ) : null}
+
+        {voiceState.status === "disconnected" && voiceState.reason !== "client" ? (
+          <div className="voice-recovery-banner" role="alert">
+            <div>
+              <p className="panel-label">Disconnected</p>
+              <p className="voice-error-title">
+                {voiceState.reason === "provider_error"
+                  ? "The provider connection failed."
+                  : "The live session closed unexpectedly."}
+              </p>
+              <p className="voice-status-copy">
+                Retry the connection to get back to a usable demo state.
+              </p>
+            </div>
+            <button className="secondary-button" type="button" onClick={() => handleStartConnection()}>
               Retry connection
             </button>
           </div>
@@ -654,7 +903,11 @@ export default function LiveSessionPage() {
               />
               <div>
                 <p className="mic-status-title">{voiceStateCopy[voiceState.status]}</p>
-                <p className="mic-status-copy">{statusCopy[connectionState]}</p>
+                <p className="mic-status-copy">
+                  {voiceState.status === "reconnecting"
+                    ? "Recovering the live transport after a recoverable failure."
+                    : statusCopy[connectionState]}
+                </p>
               </div>
             </div>
 
@@ -662,18 +915,39 @@ export default function LiveSessionPage() {
               <button
                 className="start-button"
                 type="button"
-                onClick={handleStartConnection}
+                onClick={() => handleStartConnection()}
                 disabled={!canStart}
               >
-                {connectionState === "connecting" ? "Connecting..." : "Start Live Connection"}
+                {connectionState === "connecting"
+                  ? "Connecting..."
+                  : voiceState.status === "disconnected" || voiceState.status === "error"
+                    ? "Retry Live Connection"
+                    : "Start Live Connection"}
               </button>
               <button
                 className="secondary-button"
                 type="button"
-                onClick={handleStartTurn}
-                disabled={connectionState !== "connected" || voiceState.status !== "connected"}
+                onClick={handleRetryTurn}
+                disabled={!canRetryTurn}
               >
-                Run Demo Turn Again
+                {voiceState.status === "connected"
+                  ? "Run Demo Turn Again"
+                  : "Interrupt and Retry Turn"}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  void interruptCurrentTurn();
+                }}
+                disabled={
+                  connectionState !== "connected" ||
+                  (voiceState.status !== "speaking" &&
+                    voiceState.status !== "thinking" &&
+                    voiceState.status !== "tool_running")
+                }
+              >
+                Interrupt Playback
               </button>
               <button
                 className="secondary-button"
@@ -725,6 +999,13 @@ export default function LiveSessionPage() {
                 <p className="panel-label">Result</p>
                 <pre className="tool-output">{toolState.output}</pre>
               </div>
+              {toolState.status === "failed" || toolState.status === "timed_out" ? (
+                <div className="voice-recovery-actions">
+                  <button className="secondary-button" type="button" onClick={handleRetryTurn}>
+                    Retry this turn
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -738,6 +1019,17 @@ export default function LiveSessionPage() {
                 </p>
               </div>
               <p className="transcript-session-id">Session {sessionId}</p>
+            </div>
+
+            <div className="transcript-health-panel">
+              <p className="panel-label">Transcript health</p>
+              <p className="mic-status-title">{formatStatusLabel(transcriptHealth.status)}</p>
+              <p className="mic-status-copy">{transcriptHealth.summary}</p>
+              {transcriptHealth.status === "partial" ? (
+                <button className="secondary-button" type="button" onClick={handleRetryTurn}>
+                  Recover turn
+                </button>
+              ) : null}
             </div>
 
             <div className="transcript-feed" aria-live="polite">
