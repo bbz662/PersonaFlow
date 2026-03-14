@@ -1,9 +1,11 @@
 import math
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.config import get_settings
+from app.core.observability import log_observability_event
 
 
 router = APIRouter(tags=["live"])
@@ -51,17 +53,26 @@ def _build_demo_audio_samples() -> list[float]:
 @router.websocket("/sessions/{session_id}/live")
 async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
     settings = get_settings()
+    connection_id = str(uuid4())
+    connected_at = datetime.now(timezone.utc).isoformat()
 
     if not settings.realtime_voice_enabled:
         await websocket.close(code=1008, reason="Realtime voice is disabled.")
         return
 
     await websocket.accept()
+    log_observability_event(
+        "voice.provider.connection.connected",
+        session_id=session_id,
+        connection_id=connection_id,
+        connected_at=connected_at,
+    )
     await websocket.send_json(
         {
             "type": "connection.state",
             "state": "connected",
             "session_id": session_id,
+            "connection_id": connection_id,
         }
     )
     await websocket.send_json(
@@ -85,11 +96,18 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
             message_type = message.get("type")
 
             if message_type == "session.end":
+                log_observability_event(
+                    "voice.session.stop",
+                    session_id=session_id,
+                    connection_id=connection_id,
+                    reason="client_end",
+                )
                 await websocket.send_json(
                     {
                         "type": "connection.state",
                         "state": "ended",
                         "session_id": session_id,
+                        "connection_id": connection_id,
                     }
                 )
                 await websocket.close()
@@ -100,6 +118,14 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
                     continue
 
                 turn_started = True
+                log_observability_event(
+                    "voice.tool.invocation.requested",
+                    session_id=session_id,
+                    connection_id=connection_id,
+                    tool_name=PHRASE_CARD_TOOL_NAME,
+                    turn_index=0,
+                    utterance_length=len(PRIMARY_DEMO_UTTERANCE),
+                )
                 await websocket.send_json(
                     {
                         "type": "session.event",
@@ -153,6 +179,14 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
 
                     if text and _should_request_phrase_card_tool(text):
                         turn_started = True
+                        log_observability_event(
+                            "voice.tool.invocation.requested",
+                            session_id=session_id,
+                            connection_id=connection_id,
+                            tool_name=PHRASE_CARD_TOOL_NAME,
+                            turn_index=turn_index,
+                            utterance_length=len(text),
+                        )
                         await websocket.send_json(
                             {
                                 "type": "session.event",
@@ -205,6 +239,16 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
                 tool_name = str(message.get("name") or "")
                 call_id = str(message.get("call_id") or "")
                 result = message.get("result") or {}
+                cards = result.get("cards") if isinstance(result, dict) else None
+
+                log_observability_event(
+                    "voice.tool.invocation.result_relayed",
+                    session_id=session_id,
+                    connection_id=connection_id,
+                    tool_name=tool_name,
+                    tool_call_id=call_id,
+                    card_count=len(cards) if isinstance(cards, list) else 0,
+                )
 
                 await websocket.send_json(
                     {
@@ -220,7 +264,6 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
                     }
                 )
 
-                cards = result.get("cards") if isinstance(result, dict) else None
                 if tool_name == PHRASE_CARD_TOOL_NAME and isinstance(cards, list) and cards:
                     first_card = cards[0]
                     await websocket.send_json(
@@ -270,6 +313,17 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
                 error_message = str(
                     error_payload.get("message") or "Tool execution failed in the live session."
                 )
+                error_code = str(error_payload.get("code") or "tool_error")
+
+                log_observability_event(
+                    "voice.tool.invocation.error_relayed",
+                    level="warning",
+                    session_id=session_id,
+                    connection_id=connection_id,
+                    tool_name=tool_name,
+                    tool_call_id=call_id,
+                    code=error_code,
+                )
 
                 await websocket.send_json(
                     {
@@ -280,7 +334,7 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
                                 "id": call_id,
                                 "name": tool_name,
                                 "message": error_message,
-                                "code": error_payload.get("code", "tool_error"),
+                                "code": error_code,
                             },
                             "speaker": "system",
                             "text": error_message,
@@ -302,4 +356,11 @@ async def live_session_transport(websocket: WebSocket, session_id: str) -> None:
                 turn_started = False
                 continue
     except WebSocketDisconnect:
+        log_observability_event(
+            "voice.provider.connection.disconnected",
+            level="warning",
+            session_id=session_id,
+            connection_id=connection_id,
+            reason="websocket_disconnect",
+        )
         return

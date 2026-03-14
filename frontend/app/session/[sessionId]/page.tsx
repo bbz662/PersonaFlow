@@ -11,6 +11,13 @@ import {
   type PhraseCardPreviewResult,
 } from "../../../lib/personaflow-tool-bridge";
 import {
+  createRealtimeLogEntry,
+  writeRealtimeLog,
+  type RealtimeLogEntry,
+  type RealtimeLogFields,
+  type RealtimeLogLevel,
+} from "../../../lib/realtime-observability";
+import {
   defaultRealtimeAudioMode,
   realtimeVoiceEnabled,
 } from "../../../lib/runtime-config";
@@ -56,6 +63,10 @@ type TranscriptHealthState = {
   summary: string;
 };
 
+type DebugEventEntry = RealtimeLogEntry & {
+  id: string;
+};
+
 type StartConnectionOptions = {
   reconnect?: boolean;
 };
@@ -64,6 +75,7 @@ const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 const MAX_RECONNECT_ATTEMPTS = 2;
 const RECONNECT_DELAY_MS = 1_200;
+const DEBUG_EVENT_LIMIT = 40;
 
 const statusCopy: Record<RealtimeConnectionState, string> = {
   connecting: "Opening the Gemini Live session.",
@@ -200,6 +212,8 @@ export default function LiveSessionPage() {
   const manualDisconnectRef = useRef(false);
   const inputChunkCountRef = useRef(0);
   const transcriptTurnIndexRef = useRef(0);
+  const connectionAttemptIdRef = useRef<string | null>(null);
+  const providerConnectionIdRef = useRef<string | null>(null);
   const [voiceState, dispatchVoiceState] = useReducer(
     voiceSessionReducer,
     initialVoiceSessionState,
@@ -217,9 +231,11 @@ export default function LiveSessionPage() {
   const [transcriptSaveError, setTranscriptSaveError] = useState<string | null>(null);
   const [transcriptHealth, setTranscriptHealth] =
     useState<TranscriptHealthState>(initialTranscriptHealth);
+  const [debugEvents, setDebugEvents] = useState<DebugEventEntry[]>([]);
 
   const sessionId = params.sessionId;
   const audioMode = resolveAudioMode(searchParams);
+  const debugEnabled = searchParams.get("debug") === "1";
   const startedAt = searchParams.get("startedAt");
   const startedAtLabel = startedAt ? new Date(startedAt).toLocaleString() : "Just now";
   const canStart =
@@ -242,12 +258,64 @@ export default function LiveSessionPage() {
     voiceStateRef.current = voiceState;
   }, [voiceState]);
 
+  function observe(
+    event: string,
+    options?: {
+      level?: RealtimeLogLevel;
+      fields?: RealtimeLogFields;
+      store?: boolean;
+    },
+  ) {
+    const entry = createRealtimeLogEntry({
+      event,
+      level: options?.level,
+      sessionId,
+      fields: {
+        audio_mode: audioMode,
+        connection_attempt_id: connectionAttemptIdRef.current,
+        provider_connection_id: providerConnectionIdRef.current,
+        ...options?.fields,
+      },
+    });
+
+    writeRealtimeLog(entry);
+    if (options?.store === false) {
+      return;
+    }
+
+    setDebugEvents((current) => [
+      ...current.slice(-(DEBUG_EVENT_LIMIT - 1)),
+      {
+        ...entry,
+        id: `${entry.timestamp}-${current.length}-${crypto.randomUUID()}`,
+      },
+    ]);
+  }
+
   function dispatchIfValid(event: VoiceSessionEvent) {
     const currentState = voiceStateRef.current;
 
     try {
-      voiceStateRef.current = voiceSessionReducer(currentState, event);
+      const nextState = voiceSessionReducer(currentState, event);
+      voiceStateRef.current = nextState;
       dispatchVoiceState(event);
+      observe("voice.state.transition", {
+        fields: {
+          trigger: event.type,
+          from_state: currentState.status,
+          to_state: nextState.status,
+          reconnect_attempt:
+            event.type === "reconnect.request" ? event.attempt : reconnectAttemptRef.current,
+        },
+      });
+      if (event.type === "recoverable.error" || event.type === "fatal.error") {
+        observe(`voice.error.${event.type === "recoverable.error" ? "recoverable" : "fatal"}`, {
+          level: event.type === "recoverable.error" ? "warn" : "error",
+          fields: {
+            message: event.message,
+          },
+        });
+      }
     } catch (error) {
       if (
         error instanceof Error &&
@@ -363,6 +431,13 @@ export default function LiveSessionPage() {
   }
 
   async function handleToolCall(event: RealtimeToolCallEvent) {
+    observe("voice.tool.invocation.started", {
+      fields: {
+        tool_call_id: event.callId,
+        tool_name: event.name,
+      },
+    });
+
     setToolState({
       status: "running",
       name: event.name,
@@ -374,9 +449,19 @@ export default function LiveSessionPage() {
     const dispatchResult = await toolBridgeRef.current.dispatch(event, {
       sessionId,
       apiBaseUrl: API_BASE_URL,
+      observe,
     });
 
     if (dispatchResult.status === "completed") {
+      observe("voice.tool.invocation.completed", {
+        fields: {
+          tool_call_id: event.callId,
+          tool_request_id: dispatchResult.requestId,
+          tool_name: event.name,
+          duration_ms: dispatchResult.durationMs,
+          card_count: dispatchResult.result.card_count,
+        },
+      });
       setToolState({
         status: "completed",
         name: event.name,
@@ -392,6 +477,16 @@ export default function LiveSessionPage() {
       return;
     }
 
+    observe("voice.tool.invocation.failed", {
+      level: dispatchResult.code === "timeout" ? "warn" : "error",
+      fields: {
+        tool_call_id: event.callId,
+        tool_request_id: dispatchResult.requestId,
+        tool_name: event.name,
+        duration_ms: dispatchResult.durationMs,
+        code: dispatchResult.code,
+      },
+    });
     setToolState({
       status: dispatchResult.code === "timeout" ? "timed_out" : "failed",
       name: event.name,
@@ -436,6 +531,13 @@ export default function LiveSessionPage() {
     shouldAutoStartTurnRef.current = false;
     markTranscriptPartial("The turn was interrupted before the transcript fully settled.");
     teardownTransport();
+    observe("voice.reconnect.scheduled", {
+      level: "warn",
+      fields: {
+        reason,
+        reconnect_attempt: reconnectAttemptRef.current,
+      },
+    });
     dispatchIfValid({
       type: "reconnect.request",
       attempt: reconnectAttemptRef.current,
@@ -476,6 +578,13 @@ export default function LiveSessionPage() {
       kind: "response.cancel",
       text: "Client requested immediate playback interruption.",
     });
+    observe("voice.turn.interrupted", {
+      level: "warn",
+      fields: {
+        interrupted_from: currentStatus,
+        restart_turn: restartTurn,
+      },
+    });
     await audioRef.current?.stopInput();
     audioRef.current?.flushPlayback();
     appendLocalEvent("Recovery", "Current playback was interrupted intentionally.");
@@ -498,6 +607,12 @@ export default function LiveSessionPage() {
     appendEvent(event);
 
     if (event.type === "connected") {
+      providerConnectionIdRef.current = event.connectionId;
+      observe("voice.provider.connection.connected", {
+        fields: {
+          provider_connection_id: event.connectionId,
+        },
+      });
       clearReconnectTimer();
       setSessionError(null);
       if (voiceStateRef.current.status !== "connected") {
@@ -561,6 +676,14 @@ export default function LiveSessionPage() {
       if (voiceStateRef.current.status === "tool_running") {
         dispatchIfValid({ type: "tool.call.finished" });
       }
+      observe("voice.tool.result.error", {
+        level: "warn",
+        fields: {
+          tool_call_id: event.callId,
+          tool_name: event.name,
+          code: event.code,
+        },
+      });
       setSessionError(event.message);
       return;
     }
@@ -571,6 +694,13 @@ export default function LiveSessionPage() {
         dispatchIfValid({
           type: "recoverable.error",
           message: event.message,
+        });
+      } else {
+        observe("voice.error.recoverable", {
+          level: "warn",
+          fields: {
+            message: event.message,
+          },
         });
       }
       return;
@@ -587,6 +717,13 @@ export default function LiveSessionPage() {
     }
 
     if (event.type === "session.closed") {
+      observe("voice.provider.connection.closed", {
+        level: event.reason === "remote" ? "warn" : "info",
+        fields: {
+          reason: event.reason,
+          provider_connection_id: event.connectionId,
+        },
+      });
       if (event.reason === "remote" && scheduleReconnect("The provider closed the live session.")) {
         return;
       }
@@ -605,6 +742,14 @@ export default function LiveSessionPage() {
 
     teardownTransport();
     manualDisconnectRef.current = false;
+    connectionAttemptIdRef.current = crypto.randomUUID();
+    providerConnectionIdRef.current = null;
+    observe("voice.provider.connection.start", {
+      fields: {
+        reconnect: options.reconnect ?? false,
+        reconnect_attempt: reconnectAttemptRef.current,
+      },
+    });
 
     if (options.reconnect) {
       setAssistantOutput("Recovering live connection. Retry the turn once the session is ready.");
@@ -628,7 +773,15 @@ export default function LiveSessionPage() {
     const client = createGeminiLiveClient({
       sessionId,
       apiBaseUrl: API_BASE_URL,
-      onConnectionStateChange: setConnectionState,
+      onConnectionStateChange: (state) => {
+        setConnectionState(state);
+        observe("voice.provider.connection.state_changed", {
+          level: state === "failed" ? "warn" : "info",
+          fields: {
+            state,
+          },
+        });
+      },
     });
 
     unsubscribeRef.current = client.subscribe((event) => {
@@ -664,6 +817,11 @@ export default function LiveSessionPage() {
     manualDisconnectRef.current = true;
     shouldAutoStartTurnRef.current = false;
     markTranscriptPartial("The current turn was stopped before completion.");
+    observe("voice.session.stop", {
+      fields: {
+        reason: "client_stop",
+      },
+    });
     teardownTransport();
     setConnectionState("ended");
     setSessionError(null);
@@ -679,6 +837,11 @@ export default function LiveSessionPage() {
     setViewState("processing");
     manualDisconnectRef.current = true;
     shouldAutoStartTurnRef.current = false;
+    observe("voice.session.stop", {
+      fields: {
+        reason: "session_end",
+      },
+    });
     teardownTransport();
 
     try {
@@ -691,10 +854,21 @@ export default function LiveSessionPage() {
       }
 
       const payload = (await response.json()) as SessionCompletionResponse;
+      observe("voice.session.stop.completed", {
+        fields: {
+          completed_at: payload.completed_at,
+        },
+      });
       router.push(
         `/session/${payload.session_id}/results?completedAt=${encodeURIComponent(payload.completed_at)}`,
       );
     } catch (error) {
+      observe("voice.session.stop.failed", {
+        level: "error",
+        fields: {
+          message: error instanceof Error ? error.message : "Unable to end the session right now.",
+        },
+      });
       setViewState("live");
       setCompletionError(
         error instanceof Error
@@ -709,6 +883,18 @@ export default function LiveSessionPage() {
       router.replace("/");
     }
   }, [router]);
+
+  useEffect(() => {
+    observe("voice.session.start", {
+      fields: {
+        started_at: startedAt,
+      },
+    });
+
+    return () => {
+      observe("voice.session.view_closed", { store: false });
+    };
+  }, []);
 
   useEffect(() => {
     audioRef.current = createAudioIO({
@@ -1050,6 +1236,53 @@ export default function LiveSessionPage() {
               )}
             </div>
           </div>
+
+          {debugEnabled ? (
+            <div className="session-panel transcript-panel">
+              <div className="transcript-header">
+                <div>
+                  <p className="panel-label">Debug events</p>
+                  <p className="transcript-subtitle">
+                    Structured development logs for session lifecycle, transport recovery, and
+                    tool execution.
+                  </p>
+                </div>
+                <p className="transcript-session-id">Recent {debugEvents.length}</p>
+              </div>
+
+              <div className="transcript-feed debug-feed" aria-live="polite">
+                {debugEvents.length > 0 ? (
+                  debugEvents
+                    .slice()
+                    .reverse()
+                    .map((entry) => (
+                      <article className="transcript-entry debug-entry" key={entry.id}>
+                        <div className="debug-entry-header">
+                          <p className="transcript-speaker">{entry.event}</p>
+                          <p className={`voice-tool-badge voice-tool-${entry.level}`}>
+                            {entry.level}
+                          </p>
+                        </div>
+                        <p className="transcript-text debug-entry-meta">
+                          {new Date(entry.timestamp).toLocaleTimeString()}
+                        </p>
+                        <pre className="tool-output debug-entry-fields">
+                          {JSON.stringify(entry.fields, null, 2)}
+                        </pre>
+                      </article>
+                    ))
+                ) : (
+                  <div className="empty-feed">
+                    <p className="transcript-speaker">No debug events yet</p>
+                    <p className="transcript-text">
+                      Add <code>?debug=1</code> and start the live connection to inspect the event
+                      trail.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
         </section>
 
         <div className="session-actions">

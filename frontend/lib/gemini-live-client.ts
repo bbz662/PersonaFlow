@@ -33,6 +33,7 @@ type TransportMessage =
       type: "connection.state";
       state: RealtimeConnectionState;
       session_id: string;
+      connection_id?: string;
     }
   | {
       type: "session.event";
@@ -179,6 +180,7 @@ export class GeminiLiveClient implements RealtimeSessionClient {
   private currentState: RealtimeConnectionState = "ended";
   private disconnectInitiatedByClient = false;
   private closeEmitted = false;
+  private connectionId: string | null = null;
 
   constructor(options: GeminiLiveClientOptions) {
     this.sessionId = options.sessionId;
@@ -212,7 +214,11 @@ export class GeminiLiveClient implements RealtimeSessionClient {
       const payload = JSON.parse(messageEvent.data) as TransportMessage;
 
       if (payload.type === "connection.state") {
-        this.handleConnectionState(payload.state, payload.session_id);
+        this.handleConnectionState(
+          payload.state,
+          payload.session_id,
+          payload.connection_id ?? null,
+        );
         return;
       }
 
@@ -340,11 +346,16 @@ export class GeminiLiveClient implements RealtimeSessionClient {
   private handleConnectionState(
     state: RealtimeConnectionState,
     sessionId: string,
+    connectionId: string | null,
   ) {
+    if (connectionId) {
+      this.connectionId = connectionId;
+    }
+
     this.updateState(state);
 
     if (state === "connected") {
-      this.emit({ type: "connected", sessionId });
+      this.emit({ type: "connected", sessionId, connectionId: this.connectionId });
       return;
     }
 
@@ -376,7 +387,9 @@ export class GeminiLiveClient implements RealtimeSessionClient {
     this.emit({
       type: "session.closed",
       reason: this.disconnectInitiatedByClient ? "client" : "remote",
+      connectionId: this.connectionId,
     });
+    this.connectionId = null;
   }
 
   private updateState(state: RealtimeConnectionState) {
