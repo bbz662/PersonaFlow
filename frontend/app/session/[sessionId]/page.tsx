@@ -1,20 +1,31 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 
+import { createAudioIO, type AudioIO, type AudioIOMode } from "../../../lib/audio-io";
 import { createGeminiLiveClient } from "../../../lib/gemini-live-client";
 import {
   PersonaFlowToolBridge,
   PHRASE_CARD_TOOL_NAME,
   type PhraseCardPreviewResult,
 } from "../../../lib/personaflow-tool-bridge";
+import {
+  defaultRealtimeAudioMode,
+  realtimeVoiceEnabled,
+} from "../../../lib/runtime-config";
 import type {
   RealtimeConnectionState,
   RealtimeSessionClient,
   RealtimeSessionEvent,
   RealtimeToolCallEvent,
 } from "../../../lib/realtime-session-client";
+import {
+  initialVoiceSessionState,
+  voiceSessionReducer,
+  type VoiceSessionEvent,
+  type VoiceSessionState,
+} from "../../../lib/voice-session-state";
 
 type EventFeedEntry = {
   id: string;
@@ -45,21 +56,34 @@ const API_BASE_URL =
 
 const statusCopy: Record<RealtimeConnectionState, string> = {
   connecting: "Opening the Gemini Live session.",
-  connected: "Gemini Live is active and ready for session events.",
-  failed: "The Gemini Live session could not connect. Try starting again.",
+  connected: "Gemini Live is active and ready for the next spoken turn.",
+  failed: "The Gemini Live session could not connect. Retry the demo session.",
   ended: "The Gemini Live session is not active.",
+};
+
+const voiceStateCopy: Record<VoiceSessionState["status"], string> = {
+  idle: "Ready to connect",
+  connecting: "Connecting live session",
+  connected: "Connected and waiting for a turn",
+  listening: "Listening to the learner",
+  thinking: "Preparing the tool handoff",
+  tool_running: "Running phrase-card preview",
+  speaking: "Playing the assistant reply",
+  interrupted: "Session interrupted",
+  disconnected: "Connection closed",
+  error: "Attention needed",
 };
 
 const initialToolState: ToolPanelState = {
   status: "idle",
   name: "Phrase card preview",
-  summary: "Waiting for a tool request from the live session.",
+  summary: "Waiting for the live session to invoke the PersonaFlow tool.",
   output: "No tool run yet.",
   callId: null,
 };
 
-function formatStatusLabel(status: RealtimeConnectionState) {
-  return status.charAt(0).toUpperCase() + status.slice(1);
+function formatStatusLabel(status: string) {
+  return status.charAt(0).toUpperCase() + status.slice(1).replaceAll("_", " ");
 }
 
 function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEntry {
@@ -86,8 +110,8 @@ function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEn
     case "response.audio":
       return {
         id: `audio-${index}`,
-        speaker: "PersonaFlow audio",
-        text: `Received ${event.chunk.samples.length} audio samples from the model output.`,
+        speaker: "Audio",
+        text: `Assistant playback received ${event.chunk.samples.length} audio samples.`,
       };
 
     case "tool.call.requested":
@@ -131,50 +155,93 @@ function buildFeedEntry(event: RealtimeSessionEvent, index: number): EventFeedEn
   }
 }
 
+function resolveAudioMode(searchParams: ReturnType<typeof useSearchParams>): AudioIOMode {
+  return searchParams.get("audio") === "browser" ? "browser" : defaultRealtimeAudioMode;
+}
+
 export default function LiveSessionPage() {
   const params = useParams<{ sessionId: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
   const clientRef = useRef<RealtimeSessionClient | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const audioRef = useRef<AudioIO | null>(null);
   const toolBridgeRef = useRef(new PersonaFlowToolBridge());
-  const [connectionState, setConnectionState] = useState<RealtimeConnectionState>("ended");
+  const voiceStateRef = useRef<VoiceSessionState>(initialVoiceSessionState);
+  const shouldAutoStartTurnRef = useRef(true);
+  const inputChunkCountRef = useRef(0);
+  const transcriptTurnIndexRef = useRef(0);
+  const [voiceState, dispatchVoiceState] = useReducer(
+    voiceSessionReducer,
+    initialVoiceSessionState,
+  );
+  const [connectionState, setConnectionState] =
+    useState<RealtimeConnectionState>("ended");
   const [eventFeed, setEventFeed] = useState<EventFeedEntry[]>([]);
   const [viewState, setViewState] = useState<SessionViewState>("live");
   const [completionError, setCompletionError] = useState<string | null>(null);
-  const [utteranceText, setUtteranceText] = useState(
-    "Turn this into a phrase card: I stayed in, made curry, and talked with my sister for hours.",
-  );
-  const [utteranceError, setUtteranceError] = useState<string | null>(null);
   const [toolState, setToolState] = useState<ToolPanelState>(initialToolState);
-  const [nextTurnIndex, setNextTurnIndex] = useState(0);
+  const [assistantOutput, setAssistantOutput] = useState(
+    "The assistant reply will appear here after the tool returns.",
+  );
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [transcriptSaveError, setTranscriptSaveError] = useState<string | null>(null);
 
   const sessionId = params.sessionId;
+  const audioMode = resolveAudioMode(searchParams);
   const startedAt = searchParams.get("startedAt");
-  const startedAtLabel = startedAt
-    ? new Date(startedAt).toLocaleString()
-    : "Just now";
-
+  const startedAtLabel = startedAt ? new Date(startedAt).toLocaleString() : "Just now";
   const canStart = connectionState === "ended" || connectionState === "failed";
   const canStop =
     connectionState === "connecting" || connectionState === "connected";
   const isEnding = viewState === "processing";
 
-  const statusDescription = useMemo(() => {
-    return statusCopy[connectionState];
-  }, [connectionState]);
-
   useEffect(() => {
-    return () => {
-      unsubscribeRef.current?.();
-      clientRef.current?.disconnect();
-      unsubscribeRef.current = null;
-      clientRef.current = null;
-    };
-  }, []);
+    voiceStateRef.current = voiceState;
+  }, [voiceState]);
+
+  function dispatchIfValid(event: VoiceSessionEvent) {
+    const currentState = voiceStateRef.current;
+    const status = currentState.status;
+
+    if (
+      (event.type === "connect.request" &&
+        !["idle", "disconnected", "interrupted", "error"].includes(status)) ||
+      (event.type === "connected" && status !== "connecting") ||
+      (event.type === "mic.start" && status !== "connected") ||
+      (event.type === "mic.stop" && status !== "listening") ||
+      (event.type === "speech.detected" && status !== "listening") ||
+      (event.type === "tool.call.started" && status !== "thinking") ||
+      (event.type === "tool.call.finished" && status !== "tool_running") ||
+      (event.type === "response.started" && status !== "thinking") ||
+      (event.type === "response.ended" && status !== "speaking") ||
+      (event.type === "interruption" &&
+        ![
+          "connecting",
+          "connected",
+          "listening",
+          "thinking",
+          "speaking",
+          "tool_running",
+        ].includes(status)) ||
+      (event.type === "disconnect" && status === "disconnected")
+    ) {
+      return;
+    }
+
+    voiceStateRef.current = voiceSessionReducer(currentState, event);
+    dispatchVoiceState(event);
+  }
 
   function appendEvent(event: RealtimeSessionEvent) {
     setEventFeed((current) => [...current, buildFeedEntry(event, current.length)]);
+  }
+
+  function resetTurnCycle() {
+    inputChunkCountRef.current = 0;
+    setToolState(initialToolState);
+    setAssistantOutput("Listening for the next spoken turn.");
+    setSessionError(null);
   }
 
   function buildToolOutput(result: PhraseCardPreviewResult) {
@@ -186,16 +253,58 @@ export default function LiveSessionPage() {
       .slice(0, 2)
       .map(
         (card, index) =>
-          `${index + 1}. ${card.english_expression} (${card.tone_tag})`,
+          `${index + 1}. ${card.english_expression} (${card.tone_tag})\n   ${card.usage_note}`,
       )
       .join("\n");
+  }
+
+  async function persistTranscriptEntry(
+    speaker: "user" | "agent",
+    text: string,
+    language: string,
+  ) {
+    try {
+      const turnIndex = transcriptTurnIndexRef.current;
+      transcriptTurnIndexRef.current += 1;
+
+      const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/transcript`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          entries: [
+            {
+              entry_id: crypto.randomUUID(),
+              speaker,
+              text,
+              language,
+              timestamp: new Date().toISOString(),
+              turn_index: turnIndex,
+            },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to save live transcript to the session.");
+      }
+
+      setTranscriptSaveError(null);
+    } catch (error) {
+      setTranscriptSaveError(
+        error instanceof Error
+          ? error.message
+          : "Unable to save live transcript to the session.",
+      );
+    }
   }
 
   async function handleToolCall(event: RealtimeToolCallEvent) {
     setToolState({
       status: "running",
       name: event.name,
-      summary: "PersonaFlow is generating phrase card previews from the latest utterance.",
+      summary: "PersonaFlow is generating phrase-card previews from the latest spoken turn.",
       output: "Waiting for backend tool output...",
       callId: event.callId,
     });
@@ -227,10 +336,11 @@ export default function LiveSessionPage() {
       summary: dispatchResult.message,
       output:
         dispatchResult.code === "timeout"
-          ? "The tool hit the live-session timeout before PersonaFlow could return previews."
-          : "The tool request failed before any phrase card preview could be returned.",
+          ? "The tool timed out before PersonaFlow could return phrase-card previews."
+          : "The tool request failed before any phrase-card preview could be returned.",
       callId: event.callId,
     });
+    setSessionError(dispatchResult.message);
     clientRef.current?.sendToolError({
       callId: event.callId,
       name: event.name,
@@ -239,12 +349,78 @@ export default function LiveSessionPage() {
     });
   }
 
-  function handleRealtimeEvent(event: RealtimeSessionEvent) {
+  async function handleRealtimeEvent(event: RealtimeSessionEvent) {
     appendEvent(event);
 
-    if (event.type === "tool.call.requested") {
-      void handleToolCall(event);
+    if (event.type === "connected") {
+      dispatchIfValid({ type: "connected" });
+      return;
     }
+
+    if (event.type === "transcript.received") {
+      if (event.speaker === "agent") {
+        setAssistantOutput(event.text);
+        void persistTranscriptEntry("agent", event.text, "en");
+      } else if (event.speaker === "user") {
+        void persistTranscriptEntry("user", event.text, "ja");
+      }
+      return;
+    }
+
+    if (event.type === "response.audio") {
+      if (voiceStateRef.current.status === "thinking") {
+        dispatchIfValid({ type: "response.started" });
+      }
+
+      try {
+        await audioRef.current?.pushPlaybackChunk(event.chunk);
+      } catch {
+        setSessionError("Unable to play the assistant audio for this demo turn.");
+        dispatchIfValid({
+          type: "recoverable.error",
+          message: "Unable to play the assistant audio for this demo turn.",
+        });
+      }
+      return;
+    }
+
+    if (event.type === "tool.call.requested") {
+      if (voiceStateRef.current.status === "thinking") {
+        dispatchIfValid({ type: "tool.call.started" });
+      }
+      void handleToolCall(event);
+      return;
+    }
+
+    if (event.type === "tool.result.received" || event.type === "tool.error.received") {
+      if (voiceStateRef.current.status === "tool_running") {
+        dispatchIfValid({ type: "tool.call.finished" });
+      }
+      return;
+    }
+
+    if (event.type === "recoverable.error" || event.type === "fatal.error") {
+      setSessionError(event.message);
+      dispatchIfValid({
+        type: event.type,
+        message: event.message,
+      });
+      return;
+    }
+
+    if (event.type === "session.closed") {
+      dispatchIfValid({ type: "disconnect" });
+    }
+  }
+
+  function disconnectTransport() {
+    unsubscribeRef.current?.();
+    clientRef.current?.disconnect();
+    unsubscribeRef.current = null;
+    clientRef.current = null;
+    inputChunkCountRef.current = 0;
+    void audioRef.current?.stopInput();
+    audioRef.current?.flushPlayback();
   }
 
   function handleStartConnection() {
@@ -252,11 +428,15 @@ export default function LiveSessionPage() {
       return;
     }
 
-    unsubscribeRef.current?.();
-    clientRef.current?.disconnect();
+    disconnectTransport();
+    shouldAutoStartTurnRef.current = true;
+    transcriptTurnIndexRef.current = 0;
     setEventFeed([]);
     setToolState(initialToolState);
-    setUtteranceError(null);
+    setAssistantOutput("Waiting for the live session to start.");
+    setSessionError(null);
+    setTranscriptSaveError(null);
+    dispatchIfValid({ type: "connect.request" });
 
     const client = createGeminiLiveClient({
       sessionId,
@@ -264,34 +444,27 @@ export default function LiveSessionPage() {
       onConnectionStateChange: setConnectionState,
     });
 
-    unsubscribeRef.current = client.subscribe(handleRealtimeEvent);
+    unsubscribeRef.current = client.subscribe((event) => {
+      void handleRealtimeEvent(event);
+    });
     clientRef.current = client;
     client.connect();
   }
 
-  function handleStopConnection() {
-    clientRef.current?.disconnect();
+  function handleStartTurn() {
+    if (connectionState !== "connected" || voiceState.status !== "connected") {
+      return;
+    }
+
+    resetTurnCycle();
+    dispatchIfValid({ type: "mic.start" });
   }
 
-  function handleSendUtterance() {
-    const trimmed = utteranceText.trim();
-    if (!trimmed) {
-      setUtteranceError("Enter a learner utterance before sending it into the live session.");
-      return;
-    }
-
-    if (connectionState !== "connected") {
-      setUtteranceError("Connect the live session before sending a learner utterance.");
-      return;
-    }
-
-    setUtteranceError(null);
-    clientRef.current?.sendUserTranscript({
-      text: trimmed,
-      language: "ja",
-      turnIndex: nextTurnIndex,
-    });
-    setNextTurnIndex((current) => current + 1);
+  function handleStopConnection() {
+    shouldAutoStartTurnRef.current = false;
+    disconnectTransport();
+    setConnectionState("ended");
+    dispatchIfValid({ type: "disconnect" });
   }
 
   async function handleEndSession() {
@@ -301,10 +474,8 @@ export default function LiveSessionPage() {
 
     setCompletionError(null);
     setViewState("processing");
-    unsubscribeRef.current?.();
-    clientRef.current?.disconnect();
-    unsubscribeRef.current = null;
-    clientRef.current = null;
+    shouldAutoStartTurnRef.current = false;
+    disconnectTransport();
 
     try {
       const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/complete`, {
@@ -328,6 +499,89 @@ export default function LiveSessionPage() {
       );
     }
   }
+
+  useEffect(() => {
+    if (!realtimeVoiceEnabled) {
+      router.replace("/");
+    }
+  }, [router]);
+
+  useEffect(() => {
+    audioRef.current = createAudioIO({
+      mode: audioMode,
+      callbacks: {
+        onInputChunk: (chunk) => {
+          clientRef.current?.sendUserAudio(chunk);
+
+          if (voiceStateRef.current.status !== "listening") {
+            return;
+          }
+
+          inputChunkCountRef.current += 1;
+          if (inputChunkCountRef.current === 1) {
+            dispatchIfValid({ type: "speech.detected" });
+          }
+
+          if (inputChunkCountRef.current >= 6) {
+            void audioRef.current?.stopInput();
+          }
+        },
+        onPlaybackStateChange: (playing) => {
+          if (!playing && voiceStateRef.current.status === "speaking") {
+            dispatchIfValid({ type: "response.ended" });
+          }
+        },
+      },
+    });
+
+    return () => {
+      disconnectTransport();
+      void audioRef.current?.dispose();
+      audioRef.current = null;
+    };
+  }, [audioMode]);
+
+  useEffect(() => {
+    if (
+      shouldAutoStartTurnRef.current &&
+      connectionState === "connected" &&
+      voiceState.status === "connected"
+    ) {
+      shouldAutoStartTurnRef.current = false;
+      handleStartTurn();
+    }
+  }, [connectionState, voiceState.status]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    if (voiceState.status === "listening") {
+      inputChunkCountRef.current = 0;
+      void audio.startInput().catch(() => {
+        setSessionError("Unable to start audio input for the realtime demo.");
+        dispatchIfValid({
+          type: "recoverable.error",
+          message: "Unable to start audio input for the realtime demo.",
+        });
+      });
+      return;
+    }
+
+    void audio.stopInput().catch(() => {
+      setSessionError("Unable to stop audio input cleanly for the realtime demo.");
+      dispatchIfValid({
+        type: "recoverable.error",
+        message: "Unable to stop audio input cleanly for the realtime demo.",
+      });
+    });
+
+    if (voiceState.status !== "speaking") {
+      audio.flushPlayback();
+    }
+  }, [voiceState.status]);
 
   if (viewState === "processing") {
     return (
@@ -361,15 +615,34 @@ export default function LiveSessionPage() {
         <header className="live-session-header">
           <div>
             <p className="eyebrow">Live session</p>
-            <h1 className="session-title">Stay in the conversation.</h1>
+            <h1 className="session-title">One spoken phrase-card scenario.</h1>
           </div>
           <div className="session-status-block" aria-live="polite">
             <p className="session-status-label">Connection state</p>
             <p className="session-status-value">{formatStatusLabel(connectionState)}</p>
             <p className="session-meta">Started {startedAtLabel}</p>
-            <p className="session-meta">{statusDescription}</p>
+            <p className="session-meta">
+              Voice state: {voiceStateCopy[voiceState.status]}. Audio mode: {audioMode}.
+            </p>
           </div>
         </header>
+
+        {voiceState.status === "error" ? (
+          <div className="voice-error-banner" role="alert">
+            <div>
+              <p className="panel-label">
+                {voiceState.recoverable ? "Recoverable error" : "Fatal error"}
+              </p>
+              <p className="voice-error-title">{voiceState.message}</p>
+              <p className="voice-status-copy">
+                Retry the live connection to run the same primary spoken scenario again.
+              </p>
+            </div>
+            <button className="secondary-button" type="button" onClick={handleStartConnection}>
+              Retry connection
+            </button>
+          </div>
+        ) : null}
 
         <section className="session-panels" aria-label="Live session details">
           <div className="session-panel">
@@ -380,8 +653,8 @@ export default function LiveSessionPage() {
                 aria-hidden="true"
               />
               <div>
-                <p className="mic-status-title">{formatStatusLabel(connectionState)}</p>
-                <p className="mic-status-copy">{statusDescription}</p>
+                <p className="mic-status-title">{voiceStateCopy[voiceState.status]}</p>
+                <p className="mic-status-copy">{statusCopy[connectionState]}</p>
               </div>
             </div>
 
@@ -392,9 +665,15 @@ export default function LiveSessionPage() {
                 onClick={handleStartConnection}
                 disabled={!canStart}
               >
-                {connectionState === "connecting"
-                  ? "Connecting..."
-                  : "Start Live Connection"}
+                {connectionState === "connecting" ? "Connecting..." : "Start Live Connection"}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={handleStartTurn}
+                disabled={connectionState !== "connected" || voiceState.status !== "connected"}
+              >
+                Run Demo Turn Again
               </button>
               <button
                 className="secondary-button"
@@ -406,32 +685,20 @@ export default function LiveSessionPage() {
               </button>
             </div>
 
-            <div className="utterance-composer">
-              <label className="panel-label" htmlFor="live-utterance">
-                Demo utterance
-              </label>
-              <textarea
-                id="live-utterance"
-                className="session-textarea"
-                value={utteranceText}
-                onChange={(event) => setUtteranceText(event.target.value)}
-                placeholder="Say something natural, or ask PersonaFlow to pull out a phrase card."
-                rows={4}
-              />
-              <div className="transport-actions">
-                <button
-                  className="start-button"
-                  type="button"
-                  onClick={handleSendUtterance}
-                  disabled={connectionState !== "connected"}
-                >
-                  Send Utterance
-                </button>
+            <div className="tool-status-panel">
+              <div className="transcript-header">
+                <div>
+                  <p className="panel-label">Assistant output</p>
+                  <p className="transcript-subtitle">
+                    The final assistant reply reflects the live tool result for this single demo
+                    slice.
+                  </p>
+                </div>
+                <p className="voice-phase-pill">{voiceState.status.replace("_", " ")}</p>
               </div>
-              <p className="session-meta">
-                Include "phrase card" in the utterance to trigger the live tool bridge.
-              </p>
-              {utteranceError ? <p className="error-note">{utteranceError}</p> : null}
+              <div className="voice-tool-result">
+                <pre className="tool-output">{assistantOutput}</pre>
+              </div>
             </div>
 
             <div className="tool-status-panel">
@@ -439,7 +706,7 @@ export default function LiveSessionPage() {
                 <div>
                   <p className="panel-label">Tool bridge</p>
                   <p className="transcript-subtitle">
-                    One app-level PersonaFlow tool is available in the live session.
+                    One PersonaFlow phrase-card tool is exposed inside the live session.
                   </p>
                 </div>
                 <p className={`voice-tool-badge voice-tool-${toolState.status}`}>
@@ -466,7 +733,8 @@ export default function LiveSessionPage() {
               <div>
                 <p className="panel-label">Session events</p>
                 <p className="transcript-subtitle">
-                  Typed app-level events from the Gemini Live boundary land here.
+                  Spoken input, transcript events, tool activity, and assistant output all land
+                  here.
                 </p>
               </div>
               <p className="transcript-session-id">Session {sessionId}</p>
@@ -484,7 +752,7 @@ export default function LiveSessionPage() {
                 <div className="empty-feed">
                   <p className="transcript-speaker">No live events yet</p>
                   <p className="transcript-text">
-                    Start the connection to verify the Gemini Live provider boundary.
+                    Start the connection to run the spoken phrase-card scenario.
                   </p>
                 </div>
               )}
@@ -493,6 +761,8 @@ export default function LiveSessionPage() {
         </section>
 
         <div className="session-actions">
+          {sessionError ? <p className="error-note">{sessionError}</p> : null}
+          {transcriptSaveError ? <p className="error-note">{transcriptSaveError}</p> : null}
           {completionError ? <p className="error-note">{completionError}</p> : null}
           <button
             className="end-session-button"
